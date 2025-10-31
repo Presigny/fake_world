@@ -5,6 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from scipy.spatial import distance
 import seaborn as sns
+from scipy.spatial import cKDTree
 
 
 def load_df_to_gdf(path,threshold):
@@ -83,6 +84,17 @@ def crs_selector(name):
 def compute_rmax(DD,DR,RR):
     rmax = [np.max(DD),np.max(DR),np.max(DD)]
     return np.max(rmax)
+
+def compute_rmin(gdf_projected):
+    coord_data = gdf_projected.get_coordinates().to_numpy()
+    Tree = cKDTree(coord_data)
+    second_nearest,points = Tree.query(coord_data,k=3)
+    second_nearest =  second_nearest.T
+    nearest = second_nearest[1]
+    index_zero = np.where(nearest == 0)
+    after_nearest = second_nearest[2][index_zero] #becasue some neighborhood of cities have same position
+    nearest = np.concatenate((nearest,after_nearest))
+    return np.mean(nearest)
     
 
 def compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=20):
@@ -92,8 +104,10 @@ def compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbi
         DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, size, crs)
         RR = np.concatenate((RR,RR_i))
         DR = np.concatenate((DR,DR_i))
+    rmin = compute_rmin(gdf_projected)
     rmax = compute_rmax(DD,DR,RR)
     r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
+   # r_edges = np.linspace(rmin,rmax,nbins)
     hist_DD = binning_data(DD,nbins,r_edges)
     DD_norm = hist_DD/len(DD) #normalized_count(hist_DD,N_D)
     del DD
@@ -106,30 +120,42 @@ def compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbi
     xi= compute_LS_correlation(DD_norm,DR_norm,RR_norm)
     return r_edges,xi
     
+    
         
 if __name__ == "__main__":
     data_dir = Path("data")
     N_run = 5
     size = 10000
-    threshold = 5000
+    threshold = 10
     name = "Italy"
     rmin = 1000
-    nbins = 20
+    nbins = 10
     crs = crs_selector(name)
     path_city = data_dir / "italy_cities.csv"
     path_border = "data/map/Italy.geojson"
     
+    def func(x,x0,gamma):
+        return (x/x0)**(-gamma)
+    from scipy.stats import linregress
     gdf_city = load_df_to_gdf(path_city,threshold)
     gdf_edge = gpd.read_file(path_border)
     gdf_projected = gdf_city.to_crs(crs)
     
     r_edges,xi = compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=nbins)
-    
-    sns.set(style="whitegrid")
+    # mask = (xi>0) & (r_edges > 10000) & (r_edges < 5e5)  # for example
+    # r_fit, xi_fit = r_edges[mask], np.log10(xi[mask])
+    # slope, intercept, r_value, p_value, std_err = linregress(r_fit, xi_fit)
+    # gamma = -slope
+    # r0 = 10 ** (intercept / gamma)
+    # sns.set(style="whitegrid")
     color = sns.color_palette("viridis", 1)[0]
-    width = np.concatenate((np.array([200]),np.diff(r_edges))) #need to find a way to encode properly the first alignement
+    width = np.concatenate((np.array([2000]),np.diff(r_edges))) #need to find a way to encode properly the first alignement
     plt.bar(r_edges,xi,width=width,align="center",edgecolor="black",color=color,alpha=0.8)
     plt.xscale("log")
-    plt.yscale("log")
+    plt.yscale("linear")
     plt.show()
-    
+    # DD = compute_DD(gdf_projected)
+    # plt.hist(DD,bins=r_edges)
+    # plt.xscale("linear")
+    # plt.show()
+
