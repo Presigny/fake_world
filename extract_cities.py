@@ -5,11 +5,11 @@ from pathlib import Path
 data_dir = Path("data")
 
 worldcities_file = data_dir / "worldcities.csv"
-save_file = data_dir / "italy_cities.csv"
+save_file = data_dir / "ukraine_cities.csv"
 
 df = pd.read_csv(worldcities_file,low_memory=False)
 
-df_fr = df.loc[df["country"] == "Italy"]
+df_fr = df.loc[df["country"] == "Ukraine"]
 
 df_fr = df_fr.dropna(subset=['population'])
 

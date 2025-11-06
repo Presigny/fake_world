@@ -3,10 +3,12 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import sys
-path = Path().cwd().parent
+path = Path().cwd()
 sys.path.append(str(path /"src"))
 import save_load_pickle as slp
+from scipy.optimize import minimize
 import methods_two_point_correlation as mtpc
+import geopandas as gpd 
 
 
 def compute_error(load_dir):
@@ -31,21 +33,16 @@ def plot_two_point_correlation(load_dir,l_error,save_dir):
         Nsim,N_run,N_point_random,threshold_city = item.name.split("_")
         r_edges, xi = d["r_edges"],d["xi"]
         color = sns.color_palette("viridis", i)[0]
-        r_edges = r_edges[1:]
-        xi = xi[1:]
         i+=1
-        print(xi)
         width = np.concatenate((np.array([2000]),np.diff(r_edges))) #need to find a way to encode properly the first alignement
         ax.bar(r_edges,xi,width=width,align="center",edgecolor="black",color=color,alpha=0.5)
-    l_error = l_error[1:]
-    print(l_error)
     plt.errorbar(r_edges, xi, yerr=l_error, fmt="o", color="r",ms=1)
     title = "2 points correlation function "+name
     plt.title(title)
     plt.ylabel(r"$\xi(r)$")
     plt.xlabel(r"$r$ (meters)")
     plt.xscale("log")
-    #plt.yscale("log")
+    plt.yscale("log")
     #plt.legend()
     plt.savefig(save_dir / title, format="png",transparent=True)
     plt.show()
@@ -58,7 +55,6 @@ def each_plot_two_point_correlation(load_dir,l_error,save_dir):
         Nsim,N_run,N_point_random,threshold_city = item.name.split("_")
         r_edges, xi = d["r_edges"],d["xi"]
         print(r_edges[0])
-        print(xi)
         color = sns.color_palette("viridis", i)[0]
         i+=1
         #fig, ax = plt.subplots()
@@ -66,7 +62,7 @@ def each_plot_two_point_correlation(load_dir,l_error,save_dir):
         width = np.concatenate((np.array([2000]),np.diff(r_edges))) #need to find a way to encode properly the first alignement
         plt.bar(r_edges,xi,width=width,align="center",edgecolor="black",color=color,alpha=0.5)
     #plt.errorbar(r_edges, xi, yerr=l_error, fmt="o", color="r",ms=1)
-        title = "2 points correlation function less points "+name
+        title = "2 points correlation function "+name
         plt.title(title)
         plt.ylabel(r"$\xi(r)$")
         plt.xlabel(r"$r$ (meters)")
@@ -103,48 +99,72 @@ def plot_distance_distribution(load_dir,save_dir,r_dist_min=False):
         plt.show()
         return 0
 
-def scatter_point_correlation(load_dir,l_error,save_dir):
-    i=1
-    name,rmin,nbins=load_dir.name.split("_")
-    fig, ax = plt.subplots()
-    sns.set(style="whitegrid")
-    for item in load_dir.iterdir():
-        d = slp.load_results(item)
-        Nsim,N_run,N_point_random,threshold_city = item.name.split("_")
-        r_edges, xi = d["r_edges"],d["xi"]
-        color = sns.color_palette("viridis", i)[0]
-        i+=1
-        powerlaw = [(r/4500)**(-0.8) for r in r_edges]
-        #width = np.concatenate((np.array([2000]),np.diff(r_edges))) #need to find a way to encode properly the first alignement
-        ax.scatter(r_edges,xi,edgecolor="black",color=color,alpha=0.5)
-        ax.plot(r_edges,powerlaw)
-    plt.errorbar(r_edges, xi, yerr=l_error, fmt="o", color="r",ms=1)
-    title = "2 points correlation function "+name
-    plt.title(title)
-    plt.ylabel(r"$\xi(r)$")
-    plt.xlabel(r"$r$ (meters)")
-    plt.xscale("log")
-    plt.yscale("log")
-    #plt.legend()
-    #plt.savefig(save_dir / title, format="png",transparent=True)
-    plt.show()
+def xi_bin_avg(r1, r2, r0, gamma):
+    # average (r/r0)^(-gamma) over bin weighted by r^2 volume
+    num = (r2**(2-gamma) - r1**(2-gamma)) / (2-gamma)
+    den = (r2**2 - r1**2) / 2.0
+    return (r0**gamma) * num / den
 
-def shot_noise(load_dir,l_error,save_dir):
-    for item in load_dir.iterdir():
-        d = slp.load_results(item)
-        r_edges, xi,distance_distribution = d["r_edges"],d["xi"],d["distance_distribution"]
-        print(len(d["distance_distribution"]))
-        hist_DD = mtpc.binning_data(distance_distribution, len(r_edges), r_edges)
-        return hist_DD
+def model_xi_bins(r_edges, r0, gamma):
+    nbins = len(r_edges)-1 
+    xi = np.zeros(nbins)
+    for i in range(nbins):
+        xi[i] = xi_bin_avg(r_edges[i], r_edges[i+1], r0, gamma)
+    return xi
 
+def neg_log_likelihood(params, DD, RR, r_edges):
+    r0, gamma = params
+    if r0 <= 0 or gamma <= 0:  # physical bounds
+        return np.inf
 
-local_dir = Path("Randombelgium_1000_8")
-load_dir = Path.cwd().parent / "data/two_point_correlation" / local_dir
-save_dir = Path.cwd() / "plot"
-l_error = compute_error(load_dir) 
+    C = len(DD)/len(RR)#(ND*(ND-1.0)) / (NR*(NR-1.0))
+    xi_model = model_xi_bins(r_edges, r0, gamma)
+    mu = C * RR * (1.0 + xi_model)
+    mu = np.maximum(mu, 1e-12)  # avoid log(0)
+
+    # Poisson log-likelihood (dropping constant terms)
+    nll = np.sum(mu - DD * np.log(mu))
+    return nll
+
+save_dir = Path("data/two_point_correlation")
+data_dir = Path("data")
+number_xi = 10
+N_run = 5
+size = 10000
+threshold = 5000
+name = "France"
+rmin = 1000
+nbins = 20
+crs = mtpc.crs_selector(name)
+path_city = Path.cwd() / data_dir / "france_cities.csv"
+path_border = Path.cwd() / data_dir / "map/France.geojson"
+
+gdf_city = mtpc.load_df_to_gdf(path_city,threshold)
+gdf_edge = gpd.read_file(path_border)
+gdf_projected = gdf_city.to_crs(crs)
+
+# path_save = Path.cwd().parent / save_dir /Path(name+"_"+str(rmin)+"_"+str(nbins))
+# path_save.mkdir(exist_ok=True)
+
+r_edges,xi,RR = mtpc.compute_two_point_correlation_with_RR(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=nbins)
+DD = mtpc.compute_DD(gdf_projected)
+
+print("fit begins")
+# Example fit
+mask = (xi >0) & (r_edges >10000) & (r_edges <1e6) #where it fits is the most probable
+r_edges = r_edges[mask]
+r_edges = np.logspace(np.log10(r_edges[0]),np.log10(r_edges[-1]),20)
+RR = mtpc.binning_data(RR, len(r_edges), r_edges)
+DD = mtpc.binning_data(DD, len(r_edges), r_edges)
+DD = DD[1:]
+DD = DD[0:(len(DD)-1)]
+RR = RR[1:]
+RR = RR[0:(len(RR)-1)]
+p0 = [70000, 1.8]  # initial guess for (r0, gamma)
+res = minimize(neg_log_likelihood, p0, args=(DD, RR, r_edges),method='Nelder-Mead')
+print("Best-fit parameters:", res.x)
+    
 
 #each_plot_two_point_correlation(load_dir,l_error,save_dir)
-plot_two_point_correlation(load_dir,l_error,save_dir)
-hist_DD = shot_noise(load_dir,l_error,save_dir)
-scatter_point_correlation(load_dir,l_error,save_dir)
-#plot_distance_distribution(load_dir,save_dir)
+# plot_two_point_correlation(load_dir,l_error,save_dir)
+# plot_distance_distribution(load_dir,save_dir)

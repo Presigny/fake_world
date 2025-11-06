@@ -42,7 +42,7 @@ def compute_one_DR_RR(gdf_projected,gdf_edge, size, crs):
     coord_data = gdf_projected.get_coordinates().to_numpy()
     DR = np.triu(distance.cdist(coord_data,coord_random)).astype(np.int32)
     DR = np.ravel(DR)
-    DR = DR[DR != 0]
+    #DR = DR[DR != 0]
     RR = np.triu(distance.cdist(coord_random,coord_random)).astype(np.int32)
     RR = np.ravel(RR)
     RR = RR[RR != 0]
@@ -79,11 +79,21 @@ def crs_selector(name):
         return 'EPSG:2154'
     if name == "Italy":
         return "EPSG:32632"
+    if name == "Belgium":
+        return "EPSG:3812"
+    if name == "Switzerland":
+        return "CH1903"
+    if name == "Ukraine":
+        return "EPSG:5558"
+    if name == "Germany":
+        return "EPSG:4839"
+    if name == "Spain":
+        return "EPSG:25830"
     return 0
 
 def compute_rmax(DD,DR,RR):
     rmax = [np.max(DD),np.max(DR),np.max(DD)]
-    return np.max(rmax)
+    return np.max(rmax)+1 #plus one is to ensure we have the correct number of bins and not one added on top
 
 def compute_rmin(gdf_projected):
     coord_data = gdf_projected.get_coordinates().to_numpy()
@@ -117,8 +127,77 @@ def compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbi
     hist_RR = binning_data(RR,nbins,r_edges)
     RR_norm = hist_RR/len(RR)
     del RR
+    print(rmin,rmax)
+    print(RR_norm)
     xi= compute_LS_correlation(DD_norm,DR_norm,RR_norm)
     return r_edges,xi
+
+def compute_two_point_correlation_average(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=20):
+    DD = compute_DD(gdf_projected)
+    rmin = compute_rmin(gdf_projected)
+    rmax = np.max(DD)+1
+    r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
+    hist_DD = binning_data(DD,nbins,r_edges)
+    DD_norm = hist_DD/len(DD) #normalized_count(hist_DD,N_D)
+    l_RR = []
+    l_DR = []
+    l_xi = []
+    for i in range(N_run):
+       # print(len(DD_norm))
+        DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, size, crs)
+        hist_DR = binning_data(DR_i,nbins,r_edges)
+        DR_norm = hist_DR/len(DR_i)
+        #print(len(DR_norm))
+        if len(DR_norm) == len(DD_norm)+1: # dont count the bin where r>r_max
+            DR_norm = DR_norm[0:(len(DR_norm)-1)]
+        l_DR.append(DR_norm)
+        del DR_i
+        hist_RR = binning_data(RR_i,nbins,r_edges)
+        RR_norm = hist_RR/len(RR_i)
+        #print(len(RR_norm))
+        if len(RR_norm) == len(DD_norm)+1:
+            RR_norm = RR_norm[0:(len(RR_norm)-1)]
+            #print("lol")
+        #if len(RR_norm) == len(DD_norm)-1:
+            #print("lol1")
+        del RR_i
+        l_RR.append(RR_norm)
+        print(hist_DD[-1],hist_RR[-2],hist_DR[-2])
+        l_xi.append(compute_LS_correlation(DD_norm,DR_norm,RR_norm))
+   # r_edges = np.linspace(rmin,rmax,nbins)
+    print(np.mean(l_xi,axis=0))
+    print(np.std(l_xi,axis=0))
+    avg_DR = np.mean(l_DR,axis=0)
+    avg_RR = np.mean(l_RR,axis=0)
+    print(rmin,rmax)
+    print(avg_RR[-1])
+    print(avg_DR[-1])
+    print(DD_norm[-1])
+    print(DD_norm)
+    xi= compute_LS_correlation(DD_norm,avg_DR,avg_RR)
+    return r_edges,xi
+
+def compute_two_point_correlation_with_RR(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=20):
+    DD = compute_DD(gdf_projected)
+    DR,RR = compute_one_DR_RR(gdf_projected,gdf_edge, size, crs)
+    for i in range(N_run-1):
+        DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, size, crs)
+        RR = np.concatenate((RR,RR_i))
+        DR = np.concatenate((DR,DR_i))
+    rmin = compute_rmin(gdf_projected)
+    rmax = compute_rmax(DD,DR,RR)
+    r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
+   # r_edges = np.linspace(rmin,rmax,nbins)
+    hist_DD = binning_data(DD,nbins,r_edges)
+    DD_norm = hist_DD/len(DD) #normalized_count(hist_DD,N_D)
+    del DD
+    hist_DR = binning_data(DR,nbins,r_edges)
+    DR_norm = hist_DR/len(DR)
+    del DR
+    hist_RR = binning_data(RR,nbins,r_edges)
+    RR_norm = hist_RR/len(RR)
+    xi= compute_LS_correlation(DD_norm,DR_norm,RR_norm)
+    return r_edges,xi,RR
     
     
         
@@ -149,10 +228,11 @@ if __name__ == "__main__":
     # r0 = 10 ** (intercept / gamma)
     # sns.set(style="whitegrid")
     color = sns.color_palette("viridis", 1)[0]
-    width = np.concatenate((np.array([2000]),np.diff(r_edges))) #need to find a way to encode properly the first alignement
-    plt.bar(r_edges,xi,width=width,align="center",edgecolor="black",color=color,alpha=0.8)
-    plt.xscale("log")
-    plt.yscale("linear")
+    lol = np.log10(r_edges)
+    width = np.concatenate((np.array([0.2]),np.diff(lol))) #need to find a way to encode properly the first alignement
+    plt.bar(lol,xi,width=width,align="center",edgecolor="black",color=color,alpha=0.8)
+    plt.xscale("linear")
+    plt.yscale("log")
     plt.show()
     # DD = compute_DD(gdf_projected)
     # plt.hist(DD,bins=r_edges)

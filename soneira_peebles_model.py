@@ -2,7 +2,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.spatial.distance import euclidean
+from scipy.spatial.distance import cdist
+import geopandas as gpd
+import pandas as pd
 
 def euclidean_distance_matrix(position):
     matrix_distance = np.zeros(shape=[len(position), len(position)])
@@ -34,7 +36,7 @@ def soneira_peebles_model(lamb,eta,L,R,erase_nodes=False):
             erase_nodes -= 1
     position = np.array(position)
     print(len(position))        
-    distance_matrix = euclidean_distance_matrix(position)
+    distance_matrix = cdist(position, position)
     return np.transpose(position,(1,0)),distance_matrix
 
 def sanity_check_dist_mat(mat): # check if no repeating elements
@@ -203,49 +205,70 @@ def quantify_correlation(percentile,pop_distribution,distance_matrix):
         
 
 if __name__ == "__main__":         
+    import methods_two_point_correlation as mtpc
     ####PARAMETERS #############################################
-    eta = 2 #density, number of circles by steps
-    l = np.exp(np.log(eta)/0.75) #fraction of space covered by the circles
-    L = 6 #size of circles, number of steps
-    erase_node =  28
+    eta = 9 #density, number of circles by steps
+    l = 6 #fraction of space covered by the circles
+    L = 4  #size of circles, number of steps
     gamma = 2 - np.log(eta)/np.log(l)
     print("gamma", gamma)
     print("fractal dimension",np.log(eta)/np.log(l))
     print("l = ", l)
-    R = 10 # radius max
+    R = 1322000 # radius max
+    
     min_rad = R/(l**(L-1))
+    nbins=20
+    rmin=0
+    N_run= 10000
+    size=5
     print("mimimum radius",min_rad )
-    position,distance_matrix = soneira_peebles_model(l,eta,L,R,erase_nodes=erase_node)
-    N_patch = len(distance_matrix[0])
-    max_size = 1e6
-    number_step = 100
-    pop_distribution = [max_size*(r**-1) for r in range(1,N_patch+1)]
-    pop_distribution[1],pop_distribution[2],pop_distribution[3] =1e6,1e6,1e6
-    #pop_distribution  = antico_distance_population(position,pop_distribution,distance_matrix,number_step,99)
-    pop_distribution  = antico_distance_population(position,pop_distribution,distance_matrix,number_step,99)
-    #rng = np.random.default_rng()
-    #rng.shuffle(pop_distribution)
-    distribution = unfold_matrix(distance_matrix)
-    log_size = [np.log(pop_distribution[i])for i in range(len(pop_distribution))]
-    print("minimum analytics,", min_rad)
-    mean_max = quantify_correlation(99,pop_distribution,distance_matrix)
-    print("mean distance of bigger points,", mean_max)
-    print("average distance of points", np.mean(distance_matrix))
-   # distribution = distribution /  np.max(distribution)
-    plt.scatter(position[0],position[1],s=log_size,c=pop_distribution,alpha=0.5)
-    plt.show()
-# =============================================================================
-   # emp_matrix = np.load("it.npy")
-    #emp_distribution = unfold_matrix(emp_matrix)
-    #emp_distribution = emp_distribution /  np.max(emp_distribution)
-    distribution = distribution
-#     #emp_matrix_2 = np.load("fr.npy")
-#     #emp_distribution_2 = unfold_matrix(emp_matrix_2)
-#     #emp_distribution_2 = emp_distribution_2 /  np.max(emp_distribution_2)
-    sns.histplot(distribution,stat="probability",binwidth=0.5,kde=True)
-    #sns.histplot(emp_distribution,stat="probability",binwidth=0.05,kde=True)
-    #plt.xscale("log")
-    plt.show()
+    position,distance_matrix = soneira_peebles_model(l,eta,L,R)
+    d = {}
+    d["x"] = position[0]
+    d["y"] = position[1]
+    #df = pd.DataFrame((position))
+    # gdf = gpd.GeoDataFrame(
+    #      d, geometry=gpd.points_from_xy(position[0], position[1]), crs="EPSG:4326")
+    # r_edges,xi = mtpc.compute_two_point_correlation(gdf,gdf_edge,N_run,size,rmin,nbins=nbins,crs="EPSG:4326")
+    # distance_distribution = mtpc.compute_DD(gdf)
+#     distribution = np.triu(distance_matrix)
+#     distribution = distribution[distribution !=0]
+#     sns.histplot(distribution,stat="probability",bins=40)
+#    #  N_patch = len(distance_matrix[0])
+#    #  max_size = 1e6
+#    #  number_step = 100
+#    #  pop_distribution = [max_size*(r**-1) for r in range(1,N_patch+1)]
+#    #  pop_distribution[1],pop_distribution[2],pop_distribution[3] =1e6,1e6,1e6
+#    #  #pop_distribution  = antico_distance_population(position,pop_distribution,distance_matrix,number_step,99)
+#    #  pop_distribution  = antico_distance_population(position,pop_distribution,distance_matrix,number_step,99)
+#    #  #rng = np.random.default_rng()
+#    #  #rng.shuffle(pop_distribution)
+#    #  distribution = unfold_matrix(distance_matrix)
+#    #  log_size = [np.log(pop_distribution[i])for i in range(len(pop_distribution))]
+#    #  print("minimum analytics,", min_rad)
+#    #  mean_max = quantify_correlation(99,pop_distribution,distance_matrix)
+#    #  print("mean distance of bigger points,", mean_max)
+#    #  print("average distance of points", np.mean(distance_matrix))
+#    # # distribution = distribution /  np.max(distribution)
+#    #  plt.scatter(position[0],position[1],s=log_size,c=pop_distribution,alpha=0.5)
+#    #  plt.show()
+# # =============================================================================
+#    # emp_matrix = np.load("it.npy")
+#     #emp_distribution = unfold_matrix(emp_matrix)
+#     #emp_distribution = emp_distribution /  np.max(emp_distribution)
+# #     #emp_matrix_2 = np.load("fr.npy")
+# #     #emp_distribution_2 = unfold_matrix(emp_matrix_2)
+# #     #emp_distribution_2 = emp_distribution_2 /  np.max(emp_distribution_2)
+    
+#     #sns.histplot(emp_distribution,stat="probability",binwidth=0.05,kde=True)
+    
+#     plt.xscale("log")
+#     plt.vlines(min_rad,ymax=0.06,ymin=0)
+#     plt.grid()
+#     plt.show()
+#     plt.scatter(position[0],position[1],color="red",alpha=0.5,s=0.1)
+#     plt.grid()
+#     plt.show()
 # =============================================================================
     
     #np.save("synthetic_data/position_sp_model",position)
