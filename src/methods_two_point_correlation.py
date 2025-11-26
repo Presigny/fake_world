@@ -86,6 +86,24 @@ def compute_one_DR_RR(gdf_projected,gdf_edge, size, crs):
     #RR = RR[RR != 0]
     return DR,RR#,len(coord_random)
 
+def compute_DD_SP(gdf_projected):
+    coord_data = gdf_projected.get_coordinates().to_numpy()
+    DD = distance.pdist(coord_data).astype(np.float32)#np.triu(distance.cdist(coord_data,coord_data)).astype(np.int32)
+    #DD = np.ravel(DD)
+    #DD = DD[DD != 0]
+    return DD
+
+def compute_one_DR_RR_SP(gdf_projected,gdf_edge, size, crs):
+    coord_random = generate_random_point(gdf_edge, size, crs)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
+    coord_data = gdf_projected.get_coordinates().to_numpy()
+    DR = distance.cdist(coord_data,coord_random).astype(np.float32)
+    DR = np.ravel(DR)
+    DR = DR[DR != 0]
+    RR = distance.pdist(coord_random).astype(np.float32)#np.triu(distance.cdist(coord_random,coord_random)).astype(np.int32)
+    #RR = np.ravel(RR)
+    #RR = RR[RR != 0]
+    return DR,RR#,len(coord_random)
+
 def binning_data(data,nbins,r_edges):
     indices = np.digitize(data, r_edges,right=True)
     hist = np.bincount(indices)
@@ -252,7 +270,8 @@ def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime
         DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
         RR = np.concatenate((RR,RR_i))
         DR = np.concatenate((DR,DR_i))
-    rmin = compute_rmin(gdf_projected)
+    if not rmin:
+        rmin = compute_rmin(gdf_projected)
     if rmax:
         rmax = rmax
     else:
@@ -262,6 +281,46 @@ def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     elif scale == "lin":
         r_edges = np.linspace(rmin,rmax,nbins)
     hist_DD = binning_data(DD,nbins,r_edges)
+    print("max DD", np.max(DD))
+    #hist_DD = hist_DD[0:(len(hist_DD)-1)]
+    del DD
+    hist_DR = binning_data(DR,nbins,r_edges)
+    del DR
+    hist_RR = binning_data(RR,nbins,r_edges)
+    del RR
+    print(rmin,rmax)
+    if len(hist_RR) == len(hist_DD)+1:
+        hist_RR = hist_RR[0:(len(hist_RR)-1)]
+    if len(hist_DR) == len(hist_DD)+1:
+        hist_DR = hist_DR[0:(len(hist_DR)-1)]
+    print(np.sum(hist_DD)*(2/(Nd*(Nd-1))))
+    print(np.sum(hist_DR)/((Nd*(Nr))))
+    print(np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
+    xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
+    return r_edges,xi
+
+def compute_two_point_correlation_2019_SP(gdf_projected,gdf_edge,crs,N_run,Nr_prime,rmin,Nd,rmax,scale,nbins=20):
+    Nr = Nr_prime*N_run
+    #Nr = len(gdf_projected)
+    DD = compute_DD_SP(gdf_projected)
+    DR,RR = compute_one_DR_RR_SP(gdf_projected,gdf_edge, Nr_prime, crs)
+    for i in range(N_run-1):
+        print(i)
+        DR_i,RR_i = compute_one_DR_RR_SP(gdf_projected,gdf_edge, Nr_prime, crs)
+        RR = np.concatenate((RR,RR_i))
+        DR = np.concatenate((DR,DR_i))
+    if not rmin:
+        rmin = compute_rmin(gdf_projected)
+    if rmax:
+        rmax = rmax
+    else:
+        rmax = np.max(DD)+1#find_rmax_meaningful(gdf_edge,crs,100000)
+    if scale =="log":
+        r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
+    elif scale == "lin":
+        r_edges = np.linspace(rmin,rmax,nbins)
+    hist_DD = binning_data(DD,nbins,r_edges)
+    print("max DD", np.max(DD))
     #hist_DD = hist_DD[0:(len(hist_DD)-1)]
     del DD
     hist_DR = binning_data(DR,nbins,r_edges)
@@ -310,15 +369,28 @@ def compute_two_point_correlation_jack(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
     return r_edges,xi
 
-def PCF_with_variance(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins):
+def PCF_with_variance(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,rmin=False):
     l_xi = []
-    rmin = 0
+    #rmin = 0
     if len(gdf_projected) == 1:
         number_point = len(gdf_projected.explode())
     else:
         number_point = len(gdf_projected)
     for i in range(k):
         r_edges,xi = compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,size,rmin,number_point,rmax,scale,nbins=nbins)
+        l_xi.append(xi)
+    xi = np.mean(l_xi,axis=0)
+    return r_edges,np.array(l_xi)
+
+def PCF_with_variance_SP(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,rmin=False):
+    l_xi = []
+    #rmin = 0
+    if len(gdf_projected) == 1:
+        number_point = len(gdf_projected.explode())
+    else:
+        number_point = len(gdf_projected)
+    for i in range(k):
+        r_edges,xi = compute_two_point_correlation_2019_SP(gdf_projected,gdf_edge,crs,N_run,size,rmin,number_point,rmax,scale,nbins=nbins)
         l_xi.append(xi)
     xi = np.mean(l_xi,axis=0)
     return r_edges,np.array(l_xi)
