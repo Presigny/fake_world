@@ -1,3 +1,6 @@
+"""
+author: Charley Presigny
+These two functions load and save dictionnaries of data in the pickle format"""
 import pickle
 
 def load_results(net):

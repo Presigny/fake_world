@@ -3,7 +3,7 @@ import geopandas as gpd
 from pathlib import Path
 
 data_dir = Path.cwd().parent / Path("data/cities")
-country = "Switzerland"
+country = "Islande"
 
 worldcities_file = data_dir / "worldcities.csv"
 save_file = data_dir / f"{country}_cities.csv"

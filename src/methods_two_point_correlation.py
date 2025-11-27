@@ -1,3 +1,9 @@
+"""
+author: Charley Presigny
+The library contains all the functions to perform the two-point correlation function analysis 
+on datasets trasnform into Geopandas datasets
+"""
+
 import pandas as pd
 import numpy as np
 import geopandas as gpd
@@ -30,29 +36,15 @@ def load_df_to_gdf(path,threshold):
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lng, df.lat), crs="EPSG:4326")
     return gdf
 
-def generate_sobol_point(gdf_edge,size,crs,check_gpd=False):
-    print(size)
-    sampler = qmc.Sobol(d=2, scramble=True)
-    sobol_points = sampler.random(n=size)
-    gdf_projected = gdf_edge.to_crs(crs)
-    print(qmc.discrepancy(sobol_points))
-    minx, miny, maxx, maxy = gdf_projected.total_bounds
-    for i in range(len(sobol_points)):
-        sobol_points[i][0] = sobol_points[i][0]*(maxx-minx)+minx
-        sobol_points[i][1] = sobol_points[i][1]*(maxy-miny)+miny
-    geometry = gpd.points_from_xy(sobol_points.T[0], sobol_points.T[1])
-    geometry = gpd.GeoDataFrame(geometry).set_geometry(0,crs=crs)
-    geometry = geometry.rename(columns ={0:'geometry'}).set_geometry('geometry',crs=crs)
-    points_inside = gpd.sjoin(geometry,gdf_projected, how="inner",predicate="within")
-    points_inside.plot()
-    coord = points_inside.get_coordinates().to_numpy()
-    print(len(coord))
-    if check_gpd:
-        return gdf_projected
-    else:
-        return coord
     
 def generate_random_point(gdf_edge,size,crs,check_gpd=False):
+    """Generate random points within the input borders
+    Input: gdf_edge: Geopandas of the border of a country
+    size: number of random points to generate
+    crs: coordinate reference system
+    check_gpd: if True, function will return the geopandas of the random point+border projected onto the crs
+    Output: coord: numpy array pf coordinates of the random points in the crs    """
+    
     sample = gdf_edge.sample_points(size)
     gdf_projected = sample.to_crs(crs)
     coord = gdf_projected.get_coordinates().to_numpy()
@@ -61,14 +53,10 @@ def generate_random_point(gdf_edge,size,crs,check_gpd=False):
     else:
         return coord
 
-# def compute_one_RR(gdf_edge,size,crs):
-#     coord_random = generate_random_point(gdf_edge, size, crs)
-#     RR = np.triu(distance.cdist(coord_random,coord_random)).astype(np.int32)
-#     RR = np.ravel(RR)
-#     RR = RR[RR != 0]
-#     return RR
-
 def compute_DD(gdf_projected):
+    """Compute the distance between every points in gdf_projected and put i in DD
+    Distance values are encoded on 32 bits to gain space 
+    """
     coord_data = gdf_projected.get_coordinates().to_numpy()
     DD = distance.pdist(coord_data).astype(np.int32)#np.triu(distance.cdist(coord_data,coord_data)).astype(np.int32)
     #DD = np.ravel(DD)
@@ -76,15 +64,18 @@ def compute_DD(gdf_projected):
     return DD
 
 def compute_one_DR_RR(gdf_projected,gdf_edge, size, crs):
+    """Compute the distance between every points in generated random points and the points in 
+    gdf_projected -> array DR
+    Compute distance between every points in generated random points -> array RR
+    Distance values are encoded on 32 bits to gain space 
+    """
     coord_random = generate_random_point(gdf_edge, size, crs)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
     coord_data = gdf_projected.get_coordinates().to_numpy()
     DR = distance.cdist(coord_data,coord_random).astype(np.int32)
     DR = np.ravel(DR)
     DR = DR[DR != 0]
     RR = distance.pdist(coord_random).astype(np.int32)#np.triu(distance.cdist(coord_random,coord_random)).astype(np.int32)
-    #RR = np.ravel(RR)
-    #RR = RR[RR != 0]
-    return DR,RR#,len(coord_random)
+    return DR,RR
 
 def compute_DD_SP(gdf_projected):
     coord_data = gdf_projected.get_coordinates().to_numpy()
@@ -105,6 +96,10 @@ def compute_one_DR_RR_SP(gdf_projected,gdf_edge, size, crs):
     return DR,RR#,len(coord_random)
 
 def binning_data(data,nbins,r_edges):
+    """Bin the data with every bins in r_edges by counting the occurence within 
+    each particular bin of the data
+    Output: array hist of the size of r_edges
+    """
     indices = np.digitize(data, r_edges,right=True)
     hist = np.bincount(indices)
     return hist
@@ -125,12 +120,13 @@ def compute_LS_correlation(DD,DR,RR):
         xi[r] = (DD[r] - 2*DR[r] + RR[r])/RR[r]
     return xi
 
-# def load_border(path,name):
-#     gdf = gpd.read_file(path)
-#     gdf = gdf.loc[gdf["NAME_ENGL"]==name]
-#     return gdf
 
 def crs_selector(name):
+    """Give the standard coordinate reference system for each country which is important to have 
+    precise distances between object in the countries
+    Input - name: str of the country
+    Output - str of the crs associated with the input country
+    """
     if name == "France":
         return 'EPSG:2154'
     if name == "Italy":
@@ -154,6 +150,9 @@ def compute_rmax(DD,DR,RR):
     return np.max(rmax)+1 #plus one is to ensure we have the correct number of bins and not one added on top
 
 def compute_rmin(gdf_projected):
+    """Compute the average value between every points and there second nearest neighbours using KDTree
+    It gives a minimum scale below which asessing the 2pcf is meaningless
+    """
     coord_data = gdf_projected.get_coordinates().to_numpy()
     Tree = cKDTree(coord_data)
     second_nearest,points = Tree.query(coord_data,k=3)
@@ -190,112 +189,65 @@ def compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbi
     xi= compute_LS_correlation(DD_norm,DR_norm,RR_norm)
     return r_edges,xi
 
-# def compute_two_point_correlation_average(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=20):
-#     DD = compute_DD(gdf_projected)
-#     rmin = compute_rmin(gdf_projected)
-#     rmax = np.max(DD)+1
-#     r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
-#     hist_DD = binning_data(DD,nbins,r_edges)
-#     DD_norm = hist_DD/len(DD) #normalized_count(hist_DD,N_D)
-#     l_RR = []
-#     l_DR = []
-#     l_xi = []
-#     for i in range(N_run):
-#        # print(len(DD_norm))
-#         DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, size, crs)
-#         hist_DR = binning_data(DR_i,nbins,r_edges)
-#         DR_norm = hist_DR/len(DR_i)
-#         #print(len(DR_norm))
-#         if len(DR_norm) == len(DD_norm)+1: # dont count the bin where r>r_max
-#             DR_norm = DR_norm[0:(len(DR_norm)-1)]
-#         l_DR.append(DR_norm)
-#         del DR_i
-#         hist_RR = binning_data(RR_i,nbins,r_edges)
-#         RR_norm = hist_RR/len(RR_i)
-#         #print(len(RR_norm))
-#         if len(RR_norm) == len(DD_norm)+1:
-#             RR_norm = RR_norm[0:(len(RR_norm)-1)]
-#             #print("lol")
-#         #if len(RR_norm) == len(DD_norm)-1:
-#             #print("lol1")
-#         del RR_i
-#         l_RR.append(RR_norm)
-#         print(hist_DD[-1],hist_RR[-2],hist_DR[-2])
-#         l_xi.append(compute_LS_correlation(DD_norm,DR_norm,RR_norm))
-#    # r_edges = np.linspace(rmin,rmax,nbins)
-#     print(np.mean(l_xi,axis=0))
-#     print(np.std(l_xi,axis=0))
-#     avg_DR = np.mean(l_DR,axis=0)
-#     avg_RR = np.mean(l_RR,axis=0)
-#     print(rmin,rmax)
-#     print(avg_RR[-1])
-#     print(avg_DR[-1])
-#     print(DD_norm[-1])
-#     print(DD_norm)
-#     xi= compute_LS_correlation(DD_norm,avg_DR,avg_RR)
-#     return r_edges,xi
-
-# def compute_two_point_correlation_with_RR(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=20):
-#     DD = compute_DD(gdf_projected)
-#     DR,RR = compute_one_DR_RR(gdf_projected,gdf_edge, size, crs)
-#     for i in range(N_run-1):
-#         DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, size, crs)
-#         RR = np.concatenate((RR,RR_i))
-#         DR = np.concatenate((DR,DR_i))
-#     rmin = compute_rmin(gdf_projected)
-#     rmax = compute_rmax(DD,DR,RR)
-#     r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
-#    # r_edges = np.linspace(rmin,rmax,nbins)
-#     hist_DD = binning_data(DD,nbins,r_edges)
-#     DD_norm = hist_DD/len(DD) #normalized_count(hist_DD,N_D)
-#     del DD
-#     hist_DR = binning_data(DR,nbins,r_edges)
-#     DR_norm = hist_DR/len(DR)
-#     del DR
-#     hist_RR = binning_data(RR,nbins,r_edges)
-#     RR_norm = hist_RR/len(RR)
-#     xi= compute_LS_correlation(DD_norm,DR_norm,RR_norm)
-#     return r_edges,xi,RR
 
 def compute_LS_correlation_2019(DD,DR,RR,Nd,Nr_prime,Nr):
+    """Compute the normalized Landy_Szalay estimator for the 2 point correlation function using
+    the split random catalog scheme of Keihanen et al. 2019
+    """
     return (Nr*(Nr_prime-1)*DD)/(Nd*(Nd-1)*RR)-(((Nr_prime-1)*DR)/(Nd*RR))+1
 
 def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime,rmin,Nd,rmax,scale,nbins=20):
-    Nr = Nr_prime*N_run
+    """Compute the two_point correlation function using the scheme of Keinahen et al. (2019 -https://doi.org/10.1051/0004-6361/201935828) 
+    Input:
+        gdf_projected: geopandas of the system of points we are interested in in the right crs
+        gdf_edge: geopandas of the border of the system of points
+        crs: str of coordinate reference system
+        N_run: int of the number of time a random catalog is generated to compute 2pcf
+        Nr_prime: Number of points in a single random catalog
+        rmin: deprecated
+        Nd: number of datapoints in system under investigation
+        rmax: float maximal value below which the 2pcf will be computed
+        scale: str linear or logscale at which the distances will be binned
+        nbins: int number of bins between rmin and rmax
+    Output:
+        r-edges: list of distance bins with length equals nbins
+        xi: array of shape (nbins) that stor for each distance bin the value of the 2pcf
+    """
+    Nr = Nr_prime*N_run # Number of points of the effective catalog
     #Nr = len(gdf_projected)
     DD = compute_DD(gdf_projected)
     DR,RR = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
-    for i in range(N_run-1):
+    for i in range(N_run-1): #run over several random catalog of size Nr_prime
         print(i)
         DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
-        RR = np.concatenate((RR,RR_i))
+        RR = np.concatenate((RR,RR_i)) #Accumulate the values in RR,DR
         DR = np.concatenate((DR,DR_i))
     if not rmin:
         rmin = compute_rmin(gdf_projected)
     if rmax:
         rmax = rmax
     else:
-        rmax = np.max(DD)+1#find_rmax_meaningful(gdf_edge,crs,100000)
-    if scale =="log":
+        rmax = np.max(DD)+1#max distance in the data
+    if scale =="log": #choose a log scale for bining the distances
         r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
     elif scale == "lin":
         r_edges = np.linspace(rmin,rmax,nbins)
     hist_DD = binning_data(DD,nbins,r_edges)
     print("max DD", np.max(DD))
     #hist_DD = hist_DD[0:(len(hist_DD)-1)]
-    del DD
+    del DD #supress the value after use to gain memory
     hist_DR = binning_data(DR,nbins,r_edges)
     del DR
     hist_RR = binning_data(RR,nbins,r_edges)
     del RR
-    print(rmin,rmax)
-    if len(hist_RR) == len(hist_DD)+1:
+    print("rmin,rmax=",rmin,rmax)
+    if len(hist_RR) == len(hist_DD)+1: #delete the last category that is above rmax
         hist_RR = hist_RR[0:(len(hist_RR)-1)]
     if len(hist_DR) == len(hist_DD)+1:
         hist_DR = hist_DR[0:(len(hist_DR)-1)]
-    print(np.sum(hist_DD)*(2/(Nd*(Nd-1))))
-    print(np.sum(hist_DR)/((Nd*(Nr))))
-    print(np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
+    print("normalization DD ",np.sum(hist_DD)*(2/(Nd*(Nd-1))))
+    print("normalization DR ",np.sum(hist_DR)/((Nd*(Nr))))
+    print("normalization RR ",np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
     return r_edges,xi
 
@@ -370,6 +322,23 @@ def compute_two_point_correlation_jack(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     return r_edges,xi
 
 def PCF_with_variance(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,rmin=False):
+    """Compute k different instances of the 2 points correlation function for gdf_projected system, 
+    to build a statistical varaince on the 2 pcf. For each instance the system is compared to N_run random catalog
+    with an effective size of N_run*size
+    Input:
+        gdf_projected: geopandas of the system of points we are interested in in the right crs
+        gdf_edge: geopandas of the border of the system of points
+        crs: str of coordinate reference system
+        N_run: int of the number of time a random catalog is generated to compute 2pcf
+        size: int size in number of points of each random catalog
+        k:  int number of times to cpmpute the 2pcf to build a statistical variance
+        rmax: float maximal value below which the 2pcf will be computed
+        scale: str linear or logscale at which the distances will be binned
+        nbins: int number of bins between rmin and rmax
+    Output:
+        r-edges: list of distance bins with length equals nbins
+        l_xi: array of shape (nbins,k) that stor for each distance bin the value of the 2pcf
+    """
     l_xi = []
     #rmin = 0
     if len(gdf_projected) == 1:
@@ -395,77 +364,26 @@ def PCF_with_variance_SP(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbin
     xi = np.mean(l_xi,axis=0)
     return r_edges,np.array(l_xi)
 
-# def compute_two_point_correlation_sobol(gdf_projected,gdf_edge,crs,N_run,Nr_prime,rmin,Nd,nbins=20):
-#     #Nr = len(gdf_projected)
-#     size = Nr_prime
-#     DD = compute_DD(gdf_projected)
-#     DR,RR,Nr_prime = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
-#     for i in range(N_run-1):
-#         print(i)
-#         DR_i,RR_i,Nr_prime = compute_one_DR_RR(gdf_projected,gdf_edge,size, crs)
-#         RR = np.concatenate((RR,RR_i))
-#         DR = np.concatenate((DR,DR_i))
-#     Nr = Nr_prime*N_run
-#     rmin = compute_rmin(gdf_projected)
-#     rmax = find_rmax_meaningful(gdf_edge,crs,100)
-#     r_edges = np.logspace(np.log10(rmin), np.log10(rmax), nbins)
-#    # r_edges = np.linspace(rmin,rmax,nbins)
-#     hist_DD = binning_data(DD,nbins,r_edges)
-#     hist_DD = hist_DD[0:(len(hist_DD)-1)]
-#     del DD
-#     hist_DR = binning_data(DR,nbins,r_edges)
-#     del DR
-#     hist_RR = binning_data(RR,nbins,r_edges)
-#     del RR
-#     print(rmin,rmax)
-#     if len(hist_RR) == len(hist_DD)+1:
-#         hist_RR = hist_RR[0:(len(hist_RR)-1)]
-#     if len(hist_DR) == len(hist_DD)+1:
-#         hist_DR = hist_DR[0:(len(hist_DR)-1)]
-#     print(Nd)
-#     print(np.sum(hist_DD)*(2/(Nd*(Nd-1))))
-#     print(np.sum(hist_DR)/((Nd*(Nr))))
-#     print(np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
-#     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
-#     return r_edges,xi
+def generate_sobol_point(gdf_edge,size,crs,check_gpd=False):
+    print(size)
+    sampler = qmc.Sobol(d=2, scramble=True)
+    sobol_points = sampler.random(n=size)
+    gdf_projected = gdf_edge.to_crs(crs)
+    print(qmc.discrepancy(sobol_points))
+    minx, miny, maxx, maxy = gdf_projected.total_bounds
+    for i in range(len(sobol_points)):
+        sobol_points[i][0] = sobol_points[i][0]*(maxx-minx)+minx
+        sobol_points[i][1] = sobol_points[i][1]*(maxy-miny)+miny
+    geometry = gpd.points_from_xy(sobol_points.T[0], sobol_points.T[1])
+    geometry = gpd.GeoDataFrame(geometry).set_geometry(0,crs=crs)
+    geometry = geometry.rename(columns ={0:'geometry'}).set_geometry('geometry',crs=crs)
+    points_inside = gpd.sjoin(geometry,gdf_projected, how="inner",predicate="within")
+    points_inside.plot()
+    coord = points_inside.get_coordinates().to_numpy()
+    print(len(coord))
+    if check_gpd:
+        return gdf_projected
+    else:
+        return coord
 
-    
-        
-# if __name__ == "__main__":
-#     data_dir = Path("data")
-#     N_run = 5
-#     size = 10000
-#     threshold = 10
-#     name = "Italy"
-#     rmin = 1000
-#     nbins = 10
-#     crs = crs_selector(name)
-#     path_city = data_dir / "italy_cities.csv"
-#     path_border = "data/map/Italy.geojson"
-    
-#     def func(x,x0,gamma):
-#         return (x/x0)**(-gamma)
-#     from scipy.stats import linregress
-#     gdf_city = load_df_to_gdf(path_city,threshold)
-#     gdf_edge = gpd.read_file(path_border)
-#     gdf_projected = gdf_city.to_crs(crs)
-    
-#     r_edges,xi = compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbins=nbins)
-#     # mask = (xi>0) & (r_edges > 10000) & (r_edges < 5e5)  # for example
-#     # r_fit, xi_fit = r_edges[mask], np.log10(xi[mask])
-#     # slope, intercept, r_value, p_value, std_err = linregress(r_fit, xi_fit)
-#     # gamma = -slope
-#     # r0 = 10 ** (intercept / gamma)
-#     # sns.set(style="whitegrid")
-#     color = sns.color_palette("viridis", 1)[0]
-#     lol = np.log10(r_edges)
-#     width = np.concatenate((np.array([0.2]),np.diff(lol))) #need to find a way to encode properly the first alignement
-#     plt.bar(lol,xi,width=width,align="center",edgecolor="black",color=color,alpha=0.8)
-#     plt.xscale("linear")
-#     plt.yscale("log")
-#     plt.show()
-#     # DD = compute_DD(gdf_projected)
-#     # plt.hist(DD,bins=r_edges)
-#     # plt.xscale("linear")
-#     # plt.show()
 
