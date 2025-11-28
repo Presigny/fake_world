@@ -3,17 +3,23 @@ author: Charley Presigny
 The library contains all the functions to perform the two-point correlation function analysis 
 on datasets trasnform into Geopandas datasets
 """
-
+# /// script
+# dependencies = [
+#  "numpy == 1.26.4",
+#  "matplotlib == 3.8.4",
+#  "scipy == 1.13.1",
+#  "pandas == 2.2.3",
+#  "geopandas == 1.0.1",
+#  "
+# ]
+# ///
 import pandas as pd
 import numpy as np
 import geopandas as gpd
-from pathlib import Path
 import matplotlib.pyplot as plt
 from scipy.spatial import distance
-import seaborn as sns
 from scipy.spatial import cKDTree
 from scipy.stats import qmc
-from shapely.geometry import Point
 
 def find_rmax_meaningful(gdf_edge,crs,initial_guess):
     gdf_border_in_crs = gdf_edge.to_crs(crs)
@@ -143,6 +149,18 @@ def crs_selector(name):
         return "EPSG:25830"
     if name == "Netherlands":
         return "EPSG:28992"
+    if name == "Austria":
+        return "EPSG:3416"
+    if name == "Bulgaria":
+        return "EPSG:9391"
+    if name == "Croatia":
+        return "EPSG:3766"
+    if name == "Cyprus":
+        return "EPSG:6312"
+    if name == "Iceland":
+        return "EPSG:9947"
+    if name == "Greece":
+        return "EPSG:2100"
     return 0
 
 def compute_rmax(DD,DR,RR):

@@ -34,7 +34,7 @@ So far with the city dataset I observe that the 2pcf has a random behavior (osci
 
 PART III: Fit the 2pcf to find the gamma of the Soneira-Peebles
 
-Fit the curve using the variance through a XXX method. Possibility of reducing the interval of fit.
+Fit the curve using the variance through a weighted non-linear least-square method. Possibility of reducing the interval of fit.
 
 PRO TIP: Fitting only on the positive part of the curve considering that the oscillation around zero represent
 a scale at which there is no more effect of the SP model
