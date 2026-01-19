@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.spatial.distance import cdist
+from scipy.spatial.distance import cdist, euclidean
 import geopandas as gpd
 import pandas as pd
 
