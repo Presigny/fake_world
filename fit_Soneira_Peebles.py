@@ -219,6 +219,10 @@ def compare_log_distribution(n_iteration,l,eta,L,R,gdf_edge,crs,number_point,ran
     nbins=20
     r_bins = np.logspace(np.log10(100),np.log10(np.max(country_distribution)+1),nbins)
     country_distribution_log = mtpc.binning_data(country_distribution,nbins,r_bins)
+    save_random = 0
+    save_SP = 0
+    l_inter_SP = []
+    l_inter_random = []
     for i in range(n_iteration):
         position = check_inside(l,eta,L,R,gdf_edge,erase_nodes)
         d = {}
@@ -232,18 +236,36 @@ def compare_log_distribution(n_iteration,l,eta,L,R,gdf_edge,crs,number_point,ran
         gdf = gpd.GeoDataFrame(pd.concat( [gdf,gdf_random_points], ignore_index=True))
         gdf_projected_random= mtpc.generate_random_point(gdf_edge,number_point,crs,check_gpd=True)
         #r_edges_random_SP,l_xi_random_SP = mtpc.PCF_with_variance(gdf_projected_random,gdf_edge,crs,N_run,size,k,rmax,scale,nbins=nbins)
-        distance_distribution_random = mtpc.compute_DD(gdf_projected_random)
-        distance_distribution_SP = mtpc.compute_DD(gdf)
-        distance_distribution_SP = mtpc.binning_data(distance_distribution_SP,nbins,r_bins)[0:nbins]
-        distance_distribution_random = mtpc.binning_data(distance_distribution_random,nbins,r_bins)[0:nbins]
+        distance_distribution_random_nobin = mtpc.compute_DD(gdf_projected_random)
+        distance_distribution_SP_nobin = mtpc.compute_DD(gdf)
+        distance_distribution_SP = mtpc.binning_data(distance_distribution_SP_nobin,nbins,r_bins)[0:nbins]
+        distance_distribution_random = mtpc.binning_data(distance_distribution_random_nobin,nbins,r_bins)[0:nbins]
         KL_distanceSP_inter = entropy(country_distribution_log+1,distance_distribution_SP+1)
         KL_distance_random_inter = entropy(country_distribution_log+1,distance_distribution_random+1)
-        if KL_distanceSP_inter <KL_distanceSP:
-            KL_distanceSP = KL_distanceSP_inter 
-        if KL_distance_random_inter <KL_distance_random:
-           KL_distance_random= KL_distance_random_inter
+        l_inter_SP.append(KL_distanceSP_inter) 
+        l_inter_random.append(KL_distance_random_inter)
+        # if KL_distanceSP_inter <KL_distanceSP:
+        #     save_SP = distance_distribution_SP
+        #     KL_distanceSP = KL_distanceSP_inter 
+        # if KL_distance_random_inter <KL_distance_random:
+        #     save_random = distance_distribution_random
+        #     KL_distance_random= KL_distance_random_inter
+    return l_inter_SP,l_inter_random
+        
+    fig,ax = plt.subplots()
+    sns.histplot(x=r_bins,weights=save_SP,bins=len(r_bins),label="SP+random",legend=True,log_scale=True)
+    sns.histplot(x=r_bins,weights=save_random,label="random",bins=len(r_bins),legend=True,log_scale=True)
+    sns.histplot(x=r_bins,weights=country_distribution_log,label="original",bins=len(r_bins),legend=True,log_scale=True,alpha=0.7)
+    plt.yscale("linear")
+    plt.legend()
+    plt.show()
+    print(r_bins)
+    gdf_edge.plot(ax=ax,color="black")
+    gdf.plot(ax=ax,color="red",markersize=0.5)
+    plt.show()
+    # KL DIVERGENCE MOYENNE
     print(KL_distanceSP,KL_distance_random)
-    return 0
+    return l_inter_SP,l_inter_random
         
 
 # 
@@ -292,37 +314,37 @@ size= 3000
 random_point = number_point-eta**L+erase_nodes
 print("mimimum radius",min_rad )
 print("random_point=", random_point)
-n_iteration=1000
+n_iteration=100
 rmax=0
 k = N_run
 scale="log"
-compare_linear_distribution(n_iteration,l,eta,L,R,gdf_edge,crs,number_point,random_point,erase_nodes,k,rmax,scale,nbins)
-#compare_log_distribution(n_iteration,l,eta,L,R,gdf_edge,crs,number_point,random_point,erase_nodes,k,rmax,scale,nbins,country_distribution)
-#position = soneira_peebles_model(l,eta,L,R,erase_nodes=0)
-# position = check_inside(l,eta,L,R,gdf_edge,erase_nodes) #soneira_peebles_border(l,eta,L,R,gdf_edge,erase_nodes=erase_nodes)
-# distance_distribution = distance.pdist(position)
+#compare_linear_distribution(n_iteration,l,eta,L,R,gdf_edge,crs,number_point,random_point,erase_nodes,k,rmax,scale,nbins)
+KLSP,KLrandom = compare_log_distribution(n_iteration,l,eta,L,R,gdf_edge,crs,number_point,random_point,erase_nodes,k,rmax,scale,nbins,country_distribution)
+position = soneira_peebles_model(l,eta,L,R,erase_nodes=0)
+position = check_inside(l,eta,L,R,gdf_edge,erase_nodes) #soneira_peebles_border(l,eta,L,R,gdf_edge,erase_nodes=erase_nodes)
+distance_distribution = distance.pdist(position)
 
-# d = {}
-# d["x"] = position.T[0]
-# d["y"] = position.T[1]
-# #df = pd.DataFrame((position))
-# gdf = gpd.GeoDataFrame(
-#       d, geometry=gpd.points_from_xy(position.T[0], position.T[1]),crs=crs)
+d = {}
+d["x"] = position.T[0]
+d["y"] = position.T[1]
+#df = pd.DataFrame((position))
+gdf = gpd.GeoDataFrame(
+      d, geometry=gpd.points_from_xy(position.T[0], position.T[1]),crs=crs)
 
-# convex_hull_polygon = gdf.union_all()
-# polygon = convex_hull_polygon.convex_hull
-# geoserie = gpd.GeoSeries(polygon)
-# squares_gdf=gpd.GeoDataFrame({'geometry': geoserie, 'df':[1]},crs=crs)
+convex_hull_polygon = gdf.union_all()
+polygon = convex_hull_polygon.convex_hull
+geoserie = gpd.GeoSeries(polygon)
+squares_gdf=gpd.GeoDataFrame({'geometry': geoserie, 'df':[1]},crs=crs)
 
-# gdf_random_square = squares_gdf.sample_points(random_point)
-# #gdf_random_square = gdf_random_square.sample_points(random_point)
-# gdf_random_square = gdf_edge.sample_points(random_point)
-# gdf_random_points = gpd.GeoDataFrame(gdf_random_square.explode().get_coordinates(),geometry=gdf_random_square.explode(),crs=crs)
-# gdf = gpd.GeoDataFrame(pd.concat( [gdf,gdf_random_points], ignore_index=True))
-# fig,ax = plt.subplots()
-# squares_gdf.plot(ax=ax)
-# gdf_edge.plot(ax=ax,color="black")
-# gdf.plot(ax=ax,color="red",markersize=0.5)
+gdf_random_square = squares_gdf.sample_points(random_point)
+#gdf_random_square = gdf_random_square.sample_points(random_point)
+gdf_random_square = gdf_edge.sample_points(random_point)
+gdf_random_points = gpd.GeoDataFrame(gdf_random_square.explode().get_coordinates(),geometry=gdf_random_square.explode(),crs=crs)
+gdf = gpd.GeoDataFrame(pd.concat( [gdf,gdf_random_points], ignore_index=True))
+fig,ax = plt.subplots()
+squares_gdf.plot(ax=ax)
+gdf_edge.plot(ax=ax,color="black")
+gdf.plot(ax=ax,color="red",markersize=0.5)
 # #N_SP = eta**L
 # k=3
 # rmax = 1e5#R/(np.max(country_distribution)/1e5)#np.max(r_edges)

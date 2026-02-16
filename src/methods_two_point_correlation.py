@@ -251,18 +251,25 @@ def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     elif scale == "lin":
         r_edges = np.linspace(rmin,rmax,nbins)
     hist_DD = binning_data(DD,nbins,r_edges)
+    print("rmax ", rmax)
+    print("rmin", rmin)
     print("max DD", np.max(DD))
+    print("min DD",np.min(DD))
     #hist_DD = hist_DD[0:(len(hist_DD)-1)]
     del DD #supress the value after use to gain memory
     hist_DR = binning_data(DR,nbins,r_edges)
     del DR
     hist_RR = binning_data(RR,nbins,r_edges)
+    print("maxRR",np.max(RR))
+    print("minRR",np.min(RR))
     del RR
     print("rmin,rmax=",rmin,rmax)
     if len(hist_RR) == len(hist_DD)+1: #delete the last category that is above rmax
         hist_RR = hist_RR[0:(len(hist_RR)-1)]
     if len(hist_DR) == len(hist_DD)+1:
         hist_DR = hist_DR[0:(len(hist_DR)-1)]
+    print("lenRR",len(hist_RR))
+    print("lenDD",len(hist_DD))
     print("normalization DD ",np.sum(hist_DD)*(2/(Nd*(Nd-1))))
     print("normalization DR ",np.sum(hist_DR)/((Nd*(Nr))))
     print("normalization RR ",np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
@@ -291,11 +298,14 @@ def compute_two_point_correlation_2019_SP(gdf_projected,gdf_edge,crs,N_run,Nr_pr
         r_edges = np.linspace(rmin,rmax,nbins)
     hist_DD = binning_data(DD,nbins,r_edges)
     print("max DD", np.max(DD))
+    print("min DD",np.min(DD))
     #hist_DD = hist_DD[0:(len(hist_DD)-1)]
     del DD
     hist_DR = binning_data(DR,nbins,r_edges)
     del DR
     hist_RR = binning_data(RR,nbins,r_edges)
+    print("maxRR",np.max(RR))
+    print("minRR",np.min(RR))
     del RR
     print(rmin,rmax)
     if len(hist_RR) == len(hist_DD)+1:
