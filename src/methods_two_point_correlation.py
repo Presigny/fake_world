@@ -107,7 +107,7 @@ def binning_data(data,nbins,r_edges):
     Output: array hist of the size of r_edges
     """
     indices = np.digitize(data, r_edges,right=True)
-    hist = np.bincount(indices)
+    hist = np.bincount(indices,minlength=nbins)
     return hist
 
 def normalized_count(hist,N1,DR=False,N2=None):
