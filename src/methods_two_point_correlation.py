@@ -42,6 +42,11 @@ def load_df_to_gdf(path,threshold):
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lng, df.lat), crs="EPSG:4326")
     return gdf
 
+def load_worm(path):
+    df = pd.read_csv(path,low_memory=False)
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.x, df.y,df.z))
+    return gdf
+
     
 def generate_random_point(gdf_edge,size,crs,check_gpd=False):
     """Generate random points within the input borders
@@ -52,7 +57,10 @@ def generate_random_point(gdf_edge,size,crs,check_gpd=False):
     Output: coord: numpy array pf coordinates of the random points in the crs    """
     
     sample = gdf_edge.sample_points(size)
-    gdf_projected = sample.to_crs(crs)
+    if crs is None:
+        gdf_projected = sample
+    else:
+        gdf_projected = sample.to_crs(crs)
     coord = gdf_projected.get_coordinates().to_numpy()
     if check_gpd:
         return gdf_projected
@@ -75,7 +83,10 @@ def compute_one_DR_RR(gdf_projected,gdf_edge, size, crs):
     Compute distance between every points in generated random points -> array RR
     Distance values are encoded on 32 bits to gain space 
     """
-    coord_random = generate_random_point(gdf_edge, size, crs)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
+    if crs is None:
+        coord_random = generate_random_point(gdf_edge, size)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
+    else:
+        coord_random = generate_random_point(gdf_edge, size, crs)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
     coord_data = gdf_projected.get_coordinates().to_numpy()
     DR = distance.cdist(coord_data,coord_random).astype(np.int32)
     DR = np.ravel(DR)
@@ -91,7 +102,10 @@ def compute_DD_SP(gdf_projected):
     return DD
 
 def compute_one_DR_RR_SP(gdf_projected,gdf_edge, size, crs):
-    coord_random = generate_random_point(gdf_edge, size, crs)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
+    if crs is None:
+        coord_random = generate_random_point(gdf_edge, size)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
+    else:
+        coord_random = generate_random_point(gdf_edge, size, crs)
     coord_data = gdf_projected.get_coordinates().to_numpy()
     DR = distance.cdist(coord_data,coord_random).astype(np.float32)
     DR = np.ravel(DR)

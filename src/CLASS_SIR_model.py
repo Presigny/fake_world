@@ -93,7 +93,7 @@ class Mobility_Matrix_Model:
             dSh_dt,flow_Sh = Spatial_Kernel_Model.SK_susceptible_host(y,point,tau,m_mobility,nb_point)
             dIh_dt,dRh_dt = Spatial_Kernel_Model.SK_infected_host(y,point,flow_Sh,gamma,nb_point)
             OUTPUT.append([dSh_dt,dIh_dt,dRh_dt])
-        print("time:",t)
+        #print("time:",t)
         #print("point:",point)
         #print("flow:", flow_Sh)
         OUTPUT = np.array(OUTPUT).flatten()
@@ -114,6 +114,7 @@ class Mobility_Matrix_Model:
         Y0_flatten = np.ravel(self.Y0) #the initial conditions are flattened to be used in solve_ivp
         nb_point = len(self.Y0)
         ODEs_system = solve_ivp(Mobility_Matrix_Model.MM_system, time_span, Y0_flatten,args=(tau,gamma,m_mobility,nb_point), t_eval=t_eval,rtol=1e-2)
+        print("One run is done")
         #ODEs_system = odeint(Mobility_Matrix_Model.MM_system, y0= Y0_flatten,args=(tau,gamma,m_mobility,nb_point), t=t_eval)
         self.Y = ODEs_system.y
         self.l_t = ODEs_system.t
