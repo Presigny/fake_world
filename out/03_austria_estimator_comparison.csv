@@ -1,0 +1,16 @@
+observable,cas,valeur
+D_M [non discriminant],Données,2.134
+D_M [non discriminant],SP + rank-matching / k-NN,1.281
+D_M [non discriminant],SP + rank-matching / comptage,1.68
+D_M [non discriminant],"Données, marques mélangées",2.089
+D_M [non discriminant],Poisson + marques données,2.012
+M_norm au pic (1 = aucun couplage),Données,1.165
+M_norm au pic (1 = aucun couplage),SP + rank-matching / k-NN,6.989
+M_norm au pic (1 = aucun couplage),SP + rank-matching / comptage,2.793
+M_norm au pic (1 = aucun couplage),"Données, marques mélangées",0.996
+M_norm au pic (1 = aucun couplage),Poisson + marques données,1.01
+gamma_people,Données,0.114
+gamma_people,SP + rank-matching / k-NN,0.598
+gamma_people,SP + rank-matching / comptage,0.996
+gamma_people,"Données, marques mélangées",0.092
+gamma_noeuds,Données,0.494

@@ -1,0 +1,13 @@
+# même socle que fake_world/ (le venv ../fake_world/.venv fonctionne tel quel)
+numpy==1.26.4
+matplotlib==3.8.4
+scipy==1.13.1
+pandas==2.2.3
+geopandas==1.0.1
+shapely
+scikit-learn
+seaborn==0.13.2
+tqdm==4.67.1
+jupyter
+# optionnel — rechargement des modèles inférés par SVI (data/bstpp_results)
+# bstpp  (JAX + NumPyro ; cf. Manring et al. 2025)

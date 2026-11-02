@@ -1,0 +1,7 @@
+variante,zipf,delta_gamma
+Données,1.228,0.065
+SP mixte + densité locale (a),1.316,0.153
+SP mixte + rank-matching (b),1.228,0.153
+"SP mixte + split SP/fond (c), moy. 10 tirages",1.228,-0.19
+SP mixte + marques mélangées (null),1.316,-0.13
+SP arbre + option niveau,1.161,-0.063
