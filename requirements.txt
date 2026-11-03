@@ -1,13 +1,27 @@
-# même socle que fake_world/ (le venv ../fake_world/.venv fonctionne tel quel)
-numpy==1.26.4
-matplotlib==3.8.4
+# Versions of the environment used to run the notebooks of this branch
+# (Python 3.12.3). The 2PCF library of main also runs with these versions.
+numpy==2.2.6
 scipy==1.13.1
 pandas==2.2.3
 geopandas==1.0.1
-shapely
-scikit-learn
+shapely==2.1.2
+pyproj==3.7.2
+matplotlib==3.8.4
 seaborn==0.13.2
+scikit-learn==1.8.0
+networkx==3.6.1
+joblib==1.5.3
 tqdm==4.67.1
-jupyter
-# optionnel — rechargement des modèles inférés par SVI (data/bstpp_results)
-# bstpp  (JAX + NumPyro ; cf. Manring et al. 2025)
+jupyter==1.1.1
+nbconvert==7.17.0
+ipykernel==7.1.0
+
+# Point processes inferred by SVI (LGCP, Hawkes, Cox-Hawkes). Needed by
+# notebooks 07 to 09 and scripts/compute_all.py, both to fit the models and to
+# reload the fitted ones stored in out/bstpp_results. The other notebooks run
+# without them.
+# BSTPP (Manring et al.): pip install git+https://github.com/imanring/BSTPP.git
+bstpp==0.1.4
+jax==0.9.2
+jaxlib==0.9.2
+numpyro==0.20.1

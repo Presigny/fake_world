@@ -1,25 +1,25 @@
 family,variant,joule_pct,joule_pct_std,note
-tension,flow,4.041021440744511,0.6264832498272996,défaut — dimensionnement par le flux
-tension,time,39.07196306613511,6.362492378926543,la file triée du papier (ordre de création)
-tension,length,32.561955512928336,4.416234922433956,la plus longue = la plus haute tension
-tension,random,130.73251664983843,18.466045635055313,"spectre respecté, corrélation détruite"
-production,random,4.72357401591305,1.2132438030755435,défaut — centrales n'importe où
-production,rural,6.114228195837336,1.6101616595172321,centrales dans le fond aléatoire
-production,urban,4.693855509418407,0.869281964487837,centrales dans les amas SP
-recette,P mélangé,4.041021440744511,0.6264832498272996,"défaut § 6 — vecteur publié, placement neutre"
-recette,P rangé,3.4396433549102747,0.6085540811353644,"§ 6 — vecteur publié, attribution du papier"
-recette,conso brassée,4.72357401591305,1.2132438030755435,"marginale de charge réelle, prod. au hasard"
-recette,κ = 0.0,4.568467994690931,1.2105946487036237,"chaîne du papier, charge plate"
-recette,κ = 0.25,4.777861183166451,1.1977085849879239,
-recette,κ = 0.5,5.994343672740593,1.0290690313298931,
-recette,κ = 1.0,12.258525668428305,2.3798960149814694,charge ∝ métadonnée de population
-κ = 1 : les autres modèles,SP20,12.521924656065131,2.997072836426848,SP à seuil imposé
-κ = 1 : les autres modèles,ORI,12.993457288674875,2.8846289158355707,11 villes (papier)
-κ = 1 : les autres modèles,RAND,5.946584478775733,1.1559943976579827,témoin uniforme — sans ville
-κ = 1 : les autres modèles,RTE réelle,15.661741853705884,2.9477326342706807,← le juge
-aplatissement de κ = 0,conso réelle en place,3.1983583860467935,0.0,94 paliers départementaux
-aplatissement de κ = 0,aplatie à sa moyenne,3.4402825394304575,0.0,ce que fait κ = 0
-ordre,neutre + flux,4.041021440744511,0.6264832498272996,défaut
-ordre,neutre + file,39.07196306613511,6.362492378926543,"file du papier, injections non rangées"
-ordre,rangée + flux,3.4396433549102747,0.6085540811353644,injections rangées comme le papier
-ordre,rangée + file,6.309287384518029,1.2504499074842184,"les deux ordres du papier, verrouillés"
+voltage,flow,4.041021440744511,0.6264832498272996,"default, sizing by flow"
+voltage,time,39.07196306613511,6.362492378926543,sorted queue of the paper (creation order)
+voltage,length,32.561955512928336,4.416234922433956,longest line = highest voltage
+voltage,random,130.73251664983843,18.466045635055313,"spectrum kept, correlation destroyed"
+production,random,4.72357401591305,1.2132438030755435,"default, plants anywhere"
+production,rural,6.114228195837336,1.6101616595172321,plants in the random background
+production,urban,4.693855509418407,0.869281964487837,plants in the SP clusters
+recipe,P shuffled,4.041021440744511,0.6264832498272996,"default of section 6, published vector, neutral placement"
+recipe,P sorted,3.4396433549102747,0.6085540811353644,"section 6, published vector, assignment of the paper"
+recipe,load reshuffled,4.72357401591305,1.2132438030755435,"real load marginal, random production"
+recipe,κ = 0.0,4.568467994690931,1.2105946487036237,"chain of the paper, flat load"
+recipe,κ = 0.25,4.777861183166451,1.1977085849879239,
+recipe,κ = 0.5,5.994343672740593,1.0290690313298931,
+recipe,κ = 1.0,12.258525668428305,2.3798960149814694,load ∝ population metadata
+κ = 1: other models,SP20,12.521924656065131,2.997072836426848,SP with imposed threshold
+κ = 1: other models,ORI,12.993457288674875,2.8846289158355707,11 cities (paper)
+κ = 1: other models,RAND,5.946584478775733,1.1559943976579827,"uniform control, no city"
+κ = 1: other models,real RTE,15.661741853705884,2.9477326342706807,← the judge
+κ = 0 flattening,real load in place,3.1983583860467935,0.0,94 département steps
+κ = 0 flattening,flattened to its mean,3.4402825394304575,0.0,what κ = 0 does
+ordering,neutral + flow,4.041021440744511,0.6264832498272996,default
+ordering,neutral + queue,39.07196306613511,6.362492378926543,"queue of the paper, unsorted injections"
+ordering,sorted + flow,3.4396433549102747,0.6085540811353644,injections sorted as in the paper
+ordering,sorted + queue,6.309287384518029,1.2504499074842184,"both orderings of the paper, locked"

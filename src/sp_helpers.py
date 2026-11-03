@@ -1,31 +1,30 @@
 """
 sp_helpers.py
 =============
-Helper functions for the Single-SP Cross-2PCF calibration notebooks.
+Soneira-Peebles (SP) model and 2PCF helpers used by the calibration pipeline.
 
-Pipeline overview
------------------
-1. m-scan on data sorted by metadata → m* = argmin_m ∫|ξ_cross(r)|dr
-2. Build a *complete* SP model: minimum L such that inside-territory count ≥ m*
-3. Verify the slope γ of the SP model (should match data, it's a model parameter)
-4. Add random background points to match the 2PCF amplitude:
-       ρ = <ξ_data / ξ_SP>_r
-       n_rand = m_SP * (1/√ρ - 1)
-5. Randomly delete nodes from the SP+random mixture to reach exactly N
+Calibration overview (see `calibration.py` and notebook 00)
+-----------------------------------------------------------
+1. Power-law fit of the data 2PCF, xi(r) = (r/r0)^(-gamma).
+2. Branching factor eta from a k-means silhouette scan.
+3. m-scan on the data sorted by a node attribute:
+       m* = argmin_m  integral |xi_AB(r)| dr
+4. Complete SP model: smallest L such that at least m* points fall inside
+   the territory, with lambda = eta^(1/(2-gamma)).
+5. Uniform background points to match the 2PCF amplitude:
+       rho    = <xi_data / xi_SP>_r
+       n_rand = m_SP * (1/sqrt(rho) - 1)
+6. Uniform random removal of nodes from the mixture to reach exactly N.
 
-All functions that are called inside joblib parallel workers re-import their
-dependencies explicitly so they are self-contained in sub-processes.
+The functions called inside joblib workers re-import their dependencies, so
+that they are self-contained in sub-processes.
 """
 
 from pathlib import Path
 import sys
 
-# ---------------------------------------------------------------------------
-# Path setup: ensure src/ is found when this module is imported from anywhere
-# (including joblib worker sub-processes).
-# ---------------------------------------------------------------------------
-_HERE = Path(__file__).resolve().parent          # .../src/ (module co-localisé)
-_SRC  = _HERE
+# Make src/ importable from anywhere, including joblib worker sub-processes.
+_SRC = Path(__file__).resolve().parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
@@ -36,39 +35,39 @@ import methods_two_point_correlation as mtpc
 
 
 # ===========================================================================
-# Soneira-Peebles model
+# Soneira-Peebles model (2D, inside a territory)
 # ===========================================================================
 
 def soneira_peebles_border(lamb, eta, L, R, gdf_edge, crs):
     """
     Generate a Soneira-Peebles fractal point set.
 
-    Starting from the centroid of gdf_edge, each point spawns η children
-    placed at a random radius r ∈ [0, R/λ^i] and angle θ ∈ [0, 2π] at
-    level i.  After L levels the cloud contains η^L candidate points.
+    Starting from the centroid of gdf_edge, each point spawns eta children
+    placed at a random radius r in [0, R/lambda^i] and angle theta in
+    [0, 2 pi] at level i. After L levels the cloud contains eta^L points.
 
     Parameters
     ----------
     lamb : float
-        Scale ratio λ = η^(1/(2-γ)).  Controls how quickly the cluster
-        radius shrinks from one level to the next.
+        Scale ratio lambda = eta^(1/(2-gamma)). Controls how quickly the
+        cluster radius shrinks from one level to the next.
     eta : int
-        Branching factor: each node spawns η children.
+        Branching factor: each node spawns eta children.
     L : int
         Number of levels (depth of the fractal tree).
     R : float
-        Reference radius in metres (e.g. half the territory perimeter / 2π).
+        Radius of the level-0 disc, in metres.
     gdf_edge : GeoDataFrame
-        Territory boundary used for the seed centroid and inside-test.
+        Territory boundary used for the seed centroid and the inside test.
     crs : str
-        Projected CRS string (metres).
+        Projected CRS (metres).
 
     Returns
     -------
-    position : ndarray, shape (η^L, 2)
+    position : ndarray, shape (eta^L, 2)
         All generated point coordinates.
     point_outside : GeoDataFrame
-        Subset of *position* that falls outside the territory.
+        Subset of `position` that falls outside the territory.
     """
     position = gdf_edge.centroid.get_coordinates().to_numpy()
     for i in range(L):
@@ -78,55 +77,54 @@ def soneira_peebles_border(lamb, eta, L, R, gdf_edge, crs):
             theta = np.random.uniform(0, 2 * np.pi, size=eta)
             for k in range(eta):
                 l_pos.append((x - r[k] * np.cos(theta[k]),
-                               y - r[k] * np.sin(theta[k])))
+                              y - r[k] * np.sin(theta[k])))
         position = np.array(l_pos)
 
     s    = gpd.GeoDataFrame(
         geometry=gpd.points_from_xy(position[:, 0], position[:, 1]), crs=crs)
     join = gpd.sjoin(s, gdf_edge, how="left", predicate="within")
     join["is_inside"] = join["index_right"].notna()
-    return position, join[join["is_inside"] == False]
+    return position, join[~join["is_inside"]]
 
 
 def get_inside_points(position, point_outside):
     """
-    Return only the points that fall *inside* the territory.
+    Return only the points that fall inside the territory.
 
     Parameters
     ----------
     position : ndarray, shape (n, 2)
     point_outside : GeoDataFrame
-        Rows whose index matches the rows in *position* that are outside.
+        Rows whose index matches the rows of `position` that are outside.
 
     Returns
     -------
     ndarray, shape (n_inside, 2)
     """
-    outside_idx = set(point_outside.index.tolist())
-    mask = np.array([i not in outside_idx for i in range(len(position))])
+    mask = np.ones(len(position), dtype=bool)
+    mask[point_outside.index.to_numpy()] = False
     return position[mask]
 
 
 def build_sp_model(m_star, eta, gamma, R_ref, gdf_edge, crs):
     """
-    Build a *complete* Soneira-Peebles model with at least m_star nodes
-    inside the territory.
+    Build a complete Soneira-Peebles model with at least m_star nodes inside
+    the territory.
 
-    The minimum number of levels L is chosen so that the expected total
-    count η^L ≥ m_star, then incremented until the inside-territory count
-    is sufficient.  The full fractal (all levels) is returned without any
-    slicing — contrary to the pool-based approach.
+    The number of levels L starts at the smallest value with eta^L >= m_star
+    and is incremented until enough points fall inside the territory. Points
+    outside the territory are discarded, and the full fractal is returned.
 
     Parameters
     ----------
     m_star : int
-        Target minimum number of inside-territory nodes.
+        Minimum number of nodes inside the territory.
     eta : int
         Branching factor.
     gamma : float
-        Power-law slope of the data 2PCF.  Sets λ = η^(1/(2-γ)).
+        Power-law exponent of the data 2PCF. Sets lambda = eta^(1/(2-gamma)).
     R_ref : float
-        Reference radius in metres.
+        Radius of the level-0 disc, in metres.
     gdf_edge : GeoDataFrame
         Territory boundary.
     crs : str
@@ -134,12 +132,11 @@ def build_sp_model(m_star, eta, gamma, R_ref, gdf_edge, crs):
 
     Returns
     -------
-    pos_sp : ndarray, shape (m_sp, 2)   — m_sp ≥ m_star
-    L      : int    — number of levels used
-    lamb   : float  — scale ratio λ
+    pos_sp : ndarray, shape (m_sp, 2), with m_sp >= m_star
+    L      : int, number of levels used
+    lamb   : float, scale ratio lambda
     """
     lamb = eta ** (1.0 / (2.0 - gamma))
-    # Minimum L such that η^L ≥ m_star
     L = max(int(np.ceil(np.log(max(m_star, eta)) / np.log(eta))), 4)
 
     for _attempt in range(10):
@@ -148,9 +145,8 @@ def build_sp_model(m_star, eta, gamma, R_ref, gdf_edge, crs):
         if len(pos_in) >= m_star:
             return pos_in, L, lamb
         L += 1
-        print(f"  L={L - 1} → {len(pos_in):,} inside < {m_star:,} → trying L={L}")
+        print(f"  L={L - 1}: {len(pos_in):,} inside < {m_star:,}, trying L={L}")
 
-    # Last resort: return whatever we have
     print(f"  Warning: could only generate {len(pos_in):,} nodes (wanted {m_star:,})")
     return pos_in, L, lamb
 
@@ -160,36 +156,38 @@ def build_sp_model(m_star, eta, gamma, R_ref, gdf_edge, crs):
 # ===========================================================================
 
 def power_law(r, gamma, r0):
-    """Power-law model  ξ(r) = (r / r₀)^(−γ)."""
+    """Power-law model xi(r) = (r / r0)^(-gamma)."""
     return (r / r0) ** (-gamma)
 
 
 def fit_2pcf(r_edges, l_xi, a=1, b=19):
     """
-    Fit a power law ξ(r) = (r/r₀)^(−γ) to a 2PCF estimate.
+    Fit a power law xi(r) = (r/r0)^(-gamma) to a 2PCF estimate, weighted by
+    the spread of the realisations.
 
     Parameters
     ----------
     r_edges : ndarray
-        Bin centre positions in metres.
+        Bin positions in metres.
     l_xi : list of ndarray
         Individual 2PCF realisations (from PCF_with_variance or bootstrap).
     a, b : int
-        Bin range [a, b) used for fitting (avoids r=0 and noisy large-r bins).
+        Bin range [a, b) used for the fit (avoids r = 0 and the noisy
+        large-r bins).
 
     Returns
     -------
-    gamma, r0, gamma_err, r0_err : floats, or (None, None, None, None) on failure.
+    gamma, r0, gamma_err, r0_err : floats, or four None on failure.
     """
     xi    = np.mean(l_xi, axis=0)
     error = np.std(l_xi,  axis=0)
 
-    # Align lengths (bincount can return variable-length arrays)
+    # Align lengths (bincount can return arrays of different lengths).
     n = min(len(xi), len(r_edges))
     xi = xi[:n]; error = error[:n]; r_edges = r_edges[:n]
     b = min(b, n - 1)
 
-    # Remove NaN / Inf produced when RR = 0 in the Landy-Szalay estimator
+    # Drop the NaN / Inf produced when RR = 0 in the Landy-Szalay estimator.
     valid = np.isfinite(xi[a:b]) & np.isfinite(r_edges[a:b])
     if valid.sum() < 3:
         print("Power-law fit failed: fewer than 3 finite points.")
@@ -215,9 +213,9 @@ def fit_2pcf(r_edges, l_xi, a=1, b=19):
 
 def _xi_mean(r_e, l_xi_loc):
     """
-    Compute the mean 2PCF across realisations, aligned to r_e length.
+    Mean 2PCF across realisations, cut to the length of r_e.
 
-    Replaces NaN / ±Inf (from RR = 0 bins) with 0.
+    NaN and +-Inf (bins with RR = 0) are replaced by 0.
     """
     xi = np.mean(l_xi_loc, axis=0)
     n  = min(len(xi), len(r_e))
@@ -227,10 +225,10 @@ def _xi_mean(r_e, l_xi_loc):
 
 def _align(r_src, xi_src, r_edges_ref):
     """
-    Interpolate xi_src (defined on r_src) onto the reference grid r_edges_ref
-    using log-space linear interpolation.
+    Interpolate xi_src (defined on r_src) onto the reference grid
+    r_edges_ref, linearly in log(r).
 
-    Bins outside the range of r_src are set to 0 (not extrapolated).
+    Bins outside the range of r_src are set to 0 (no extrapolation).
     """
     n = min(len(r_src), len(xi_src))
     r_src = r_src[:n]; xi_src = xi_src[:n]
@@ -246,15 +244,15 @@ def _align(r_src, xi_src, r_edges_ref):
 def _pcf_safe(gdf, gdf_edge, crs, N_run, size, k, rmax, scale, nbins,
               bootstrap_size, bootstrap_N_real, rmin=None):
     """
-    Compute the 2PCF, automatically switching to bootstrap for large datasets.
+    Compute the 2PCF, switching to bootstrap sub-sampling for large datasets.
 
-    Uses PCF_with_variance when len(gdf) < bootstrap_size, otherwise uses
-    compute_two_point_correlation_bootstrap.
+    Uses PCF_with_variance when len(gdf) < bootstrap_size, and
+    compute_two_point_correlation_bootstrap otherwise.
 
     Returns
     -------
     r_edges : ndarray
-    l_xi    : list of ndarray — individual realisations
+    l_xi    : list of ndarray, one per realisation
     """
     if len(gdf) < bootstrap_size:
         kwargs = dict(nbins=nbins)
@@ -274,13 +272,13 @@ def _pcf_safe(gdf, gdf_edge, crs, N_run, size, k, rmax, scale, nbins,
 
 def _random_in_territory(n, rng, gdf_edge, crs, terr_geom=None, terr_bounds=None):
     """
-    Draw n uniform random points inside the territory via rejection sampling.
+    Draw n uniform random points inside the territory by rejection sampling.
 
     Parameters
     ----------
     n           : int
     rng         : numpy Generator (np.random.default_rng)
-    gdf_edge    : GeoDataFrame  — territory boundary
+    gdf_edge    : GeoDataFrame, territory boundary
     crs         : str
     terr_geom   : shapely geometry (optional, computed if None)
     terr_bounds : tuple (minx, miny, maxx, maxy) (optional, computed if None)
@@ -321,38 +319,37 @@ def _run_cross_pcf(m, xy_data_sorted, xi_data, r_edges, gdf_edge, crs,
                    N_run, size_r, k, rmax, scale, nbins,
                    bootstrap_size=10_000, bootstrap_N_real=5):
     """
-    Compute the cross-2PCF integral for a given metadata split m.
+    Integral of the cross-2PCF for a given split m of the sorted data.
 
-    The data is sorted by descending metadata before calling this function.
-    Sub-population A contains the m highest-metadata nodes; B contains the
-    remaining N - m nodes.  The 2PCF of their union (full dataset) is passed
-    in as xi_data to avoid recomputing it for every m.
+    The data is sorted by decreasing node attribute before calling this
+    function. Sub-population A contains the m first nodes and B the N - m
+    remaining ones. The 2PCF of their union (the full dataset) is passed as
+    xi_data, so that it is not recomputed for every m.
 
-    Cross-2PCF formula (Landy-Szalay decomposition):
+    Cross-2PCF (Landy-Szalay decomposition):
 
-        ξ_AB(r) = [N² ξ_data(r) − m² ξ_AA(r) − (N−m)² ξ_BB(r)] / (2·m·(N−m))
+        xi_AB(r) = [N^2 xi_data(r) - m^2 xi_AA(r) - (N-m)^2 xi_BB(r)] / (2 m (N-m))
 
-    The function is designed to be called inside a joblib Parallel loop.
-    It re-imports its dependencies explicitly for sub-process compatibility.
+    Designed to be called inside a joblib Parallel loop.
 
     Parameters
     ----------
-    m               : int   — split index
-    xy_data_sorted  : ndarray (N, 2) — data sorted by metadata descending
-    xi_data         : ndarray — pre-computed full-data 2PCF (ξ_union)
-    r_edges         : ndarray — bin edges from the data 2PCF
-    gdf_edge        : GeoDataFrame — territory boundary
-    crs             : str
-    N_run, size_r, k: PCF computation parameters
-    rmax, scale, nbins: PCF range / binning parameters
-    bootstrap_size  : int — threshold above which bootstrap is used
-    bootstrap_N_real: int — number of bootstrap realisations
+    m                : int, split index
+    xy_data_sorted   : ndarray (N, 2), data sorted by decreasing attribute
+    xi_data          : ndarray, 2PCF of the full dataset
+    r_edges          : ndarray, bins of the data 2PCF
+    gdf_edge         : GeoDataFrame, territory boundary
+    crs              : str
+    N_run, size_r, k : 2PCF parameters (see PCF_with_variance)
+    rmax, scale, nbins : 2PCF range and binning
+    bootstrap_size   : int, size above which bootstrap sub-sampling is used
+    bootstrap_N_real : int, number of bootstrap realisations
 
     Returns
     -------
     dict with keys 'm', 'r_edges', 'xi', 'integral', or None on failure.
     """
-    # Re-import inside the worker for joblib sub-process compatibility
+    # Re-import inside the worker for joblib sub-process compatibility.
     import numpy as _np
     import geopandas as _gpd
     import sys as _sys
@@ -368,7 +365,7 @@ def _run_cross_pcf(m, xy_data_sorted, xi_data, r_edges, gdf_edge, crs,
     n_ref = len(xi_data)
 
     def _xi(xy_sub):
-        """Compute mean 2PCF for a sub-population, returning n_ref values."""
+        """Mean 2PCF of a sub-population, cut to n_ref values."""
         gdf_sub = _gpd.GeoDataFrame(
             geometry=_gpd.points_from_xy(xy_sub[:, 0], xy_sub[:, 1]), crs=crs)
         try:
@@ -391,7 +388,7 @@ def _run_cross_pcf(m, xy_data_sorted, xi_data, r_edges, gdf_edge, crs,
     xi_BB = _xi(xy_data_sorted[m:])
 
     n = min(n_ref, len(xi_AA), len(xi_BB))
-    N_tot = N_A + N_B   # = N (constant — union is always the full dataset)
+    N_tot = N_A + N_B   # = N, the union is always the full dataset
     xi_cross = (
         N_tot**2 * xi_data[:n]
         - N_A**2  * xi_AA[:n]
@@ -400,42 +397,43 @@ def _run_cross_pcf(m, xy_data_sorted, xi_data, r_edges, gdf_edge, crs,
     xi_cross = _np.nan_to_num(xi_cross, nan=0.0, posinf=0.0, neginf=0.0)
 
     r_e      = r_edges[:n]
-    integral = float(_np.trapz(_np.abs(xi_cross[1:]), r_e[1:]))
+    integral = float(_np.trapezoid(_np.abs(xi_cross[1:]), r_e[1:]))
     if not _np.isfinite(integral):
         return None
     return {"m": int(m), "r_edges": r_e, "xi": xi_cross, "integral": integral}
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Soneira-Peebles en dimension quelconque (notebook 05bis — mouche, 3D)
-# ═══════════════════════════════════════════════════════════════════════════
-# Le modèle de Soneira & Peebles (1978) est né en 3D, pour les galaxies ; c'est
-# le passage aux cartes qui était l'adaptation. Les fonctions ci-dessus sont
-# écrites pour d = 2 et trois choses y sont fausses hors du plan :
-#   - lamb = eta**(1/(2-gamma)) : le 2 est la dimension de l'espace ;
-#   - les enfants sont tirés dans un *disque* (r, theta) ;
-#   - check_inside relance l'arbre entier tant qu'un point sort du domaine,
-#     ce qui ne converge jamais à eta**L ~ 2e5 points.
-# Les fonctions qui suivent reprennent la même définition du modèle sans ces
-# trois hypothèses. Le domaine est un scipy.spatial.ConvexHull (le rôle tenu
-# par gdf_edge en 2D), ce qui les rend utilisables en 2D comme en 3D.
+# ===========================================================================
+# Soneira-Peebles in arbitrary dimension (notebook 05bis, fruit fly, 3D)
+# ===========================================================================
+# The Soneira & Peebles (1978) model was introduced in 3D, for galaxies, and
+# the version above is its adaptation to maps. Three of its ingredients only
+# hold in the plane:
+#   - lamb = eta**(1/(2-gamma)): the 2 is the dimension of the space;
+#   - the children are drawn in a disc (r, theta);
+#   - check_inside (main branch) redraws the whole tree as long as one point
+#     falls outside the domain, which never converges at eta**L ~ 2e5 points.
+# The functions below keep the same definition of the model without these
+# three assumptions. The domain is a scipy.spatial.ConvexHull (the role of
+# gdf_edge in 2D), so that they work in 2D as well as in 3D.
 
 def lambda_of_gamma(eta, gamma, dim):
-    """Rapport d'échelle lambda donnant la pente gamma voulue en dimension dim.
+    """Scale ratio lambda giving the target exponent gamma in dimension dim.
 
-    La fractale a pour dimension D = ln(eta)/ln(lambda) et sa 2PCF suit
-    xi ~ r^(-gamma) avec gamma = dim - D, d'où lambda = eta**(1/(dim-gamma)).
-    En 2D on retrouve le eta**(1/(2-gamma)) des notebooks 01-04."""
+    The fractal has dimension D = ln(eta)/ln(lambda) and its 2PCF follows
+    xi ~ r^(-gamma) with gamma = dim - D, so lambda = eta**(1/(dim-gamma)).
+    In 2D this is the eta**(1/(2-gamma)) of notebooks 01-04."""
     return float(eta) ** (1.0 / (dim - gamma))
 
 
 def sample_in_ball(size, dim, rng, radial="uniform"):
-    """Points dans la boule unité de dimension dim.
+    """Points in the unit ball of dimension dim.
 
-    radial="uniform" : uniformes en volume (r = u**(1/dim)) — la définition de
-    Soneira & Peebles. radial="linear" : r = u, la loi du code 2D historique,
-    qui concentre les enfants vers le centre (densité en r**(1-dim)) ; gardée
-    pour pouvoir chiffrer ce que ce détail change (cf. notebook 05bis)."""
+    radial="uniform": uniform in volume (r = u**(1/dim)), the definition of
+    Soneira & Peebles. radial="linear": r = u, the law of the historical 2D
+    code, which concentrates the children towards the centre (density in
+    r**(1-dim)). It is kept to measure what this detail changes
+    (see notebook 05bis)."""
     v = rng.normal(size=(size, dim))
     v /= np.linalg.norm(v, axis=1, keepdims=True)
     u = rng.random(size)
@@ -444,9 +442,9 @@ def sample_in_ball(size, dim, rng, radial="uniform"):
 
 
 def inside_hull(P, hull, chunk=None):
-    """Masque booléen « P est dans l'enveloppe convexe » (A·x + b <= 0 pour
-    toutes les faces). Découpé en tranches : la matrice complète ferait
-    len(P) x n_faces flottants, soit 0.5 Go à 1.3e5 points et 439 faces."""
+    """Boolean mask "P is inside the convex hull" (A x + b <= 0 for every
+    facet). Computed by chunks: the full matrix would hold len(P) x n_facets
+    floats, i.e. 0.5 GB at 1.3e5 points and 439 facets."""
     A, b = hull.equations[:, :-1], hull.equations[:, -1]
     chunk = max(1, 2_000_000 // len(b)) if chunk is None else chunk
     out = np.empty(len(P), dtype=bool)
@@ -458,30 +456,30 @@ def inside_hull(P, hull, chunk=None):
 
 def soneira_peebles_nd(eta, lamb, L, R, center, hull=None, rng=None,
                        radial="uniform", max_tries=64, return_levels=False):
-    """Fractale de Soneira-Peebles en dimension quelconque.
+    """Soneira-Peebles fractal in arbitrary dimension.
 
-    Chaque point du niveau i engendre eta enfants dans la boule de rayon
-    R/lamb**i qui l'entoure ; après L niveaux on rend les eta**L feuilles.
+    Each point of level i spawns eta children in the ball of radius
+    R/lamb**i around it. After L levels the eta**L leaves are returned.
 
-    Le domaine est traité **enfant par enfant** : un enfant tombé hors de
-    l'enveloppe est retiré (jusqu'à max_tries fois), au lieu de relancer
-    l'arbre entier comme check_inside. Les enfants encore dehors après
-    max_tries essais sont abandonnés — la fractale a alors un peu moins de
-    eta**L feuilles, ce que le notebook chiffre.
+    The domain is handled child by child: a child falling outside the hull
+    is redrawn (up to max_tries times), instead of redrawing the whole tree
+    like check_inside. Children still outside after max_tries attempts are
+    dropped, so the fractal can have slightly fewer than eta**L leaves
+    (notebook 05bis quantifies it).
 
     Input:
-        eta: nombre d'enfants par point
-        lamb: rapport d'échelle entre deux niveaux (cf. lambda_of_gamma)
-        L: nombre de niveaux
-        R: rayon du niveau 0
-        center: graine, (dim,) ou (1, dim)
-        hull: scipy.spatial.ConvexHull délimitant le domaine (None = illimité)
+        eta: number of children per point
+        lamb: scale ratio between two levels (see lambda_of_gamma)
+        L: number of levels
+        R: radius of level 0
+        center: seed, shape (dim,) or (1, dim)
+        hull: scipy.spatial.ConvexHull bounding the domain (None = unbounded)
         rng: np.random.Generator
-        radial: "uniform" (Soneira-Peebles) ou "linear" (code 2D historique)
-        return_levels: rendre aussi, niveau par niveau, le couple
-            (positions, indice du parent dans le niveau precedent)
+        radial: "uniform" (Soneira-Peebles) or "linear" (historical 2D code)
+        return_levels: also return, level by level, the pair
+            (positions, index of the parent in the previous level)
     Output:
-        position: array (n_feuilles, dim) — n_feuilles <= eta**L
+        position: array (n_leaves, dim), with n_leaves <= eta**L
     """
     rng = np.random.default_rng() if rng is None else rng
     pos = np.atleast_2d(np.asarray(center, dtype=float))

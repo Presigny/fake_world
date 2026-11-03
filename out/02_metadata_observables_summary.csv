@@ -1,19 +1,19 @@
-observable,variante,valeur
-D_M (dimension massique) [non discriminant],Données,2.31
-D_M (dimension massique) [non discriminant],SP + densité locale (a),1.423
-D_M (dimension massique) [non discriminant],SP + rank-matching (b),1.458
-D_M (dimension massique) [non discriminant],SP + split SP/fond (c),1.403
-D_M (dimension massique) [non discriminant],"Données, marques mélangées",2.276
-D_M (dimension massique) [non discriminant],Poisson + marques données,2.179
-"M_norm (pic, 1=aucun couplage)",Données,1.738
-"M_norm (pic, 1=aucun couplage)",SP + densité locale (a),3.298
-"M_norm (pic, 1=aucun couplage)",SP + rank-matching (b),3.134
-"M_norm (pic, 1=aucun couplage)",SP + split SP/fond (c),2.349
-"M_norm (pic, 1=aucun couplage)","Données, marques mélangées",1.104
-"M_norm (pic, 1=aucun couplage)",Poisson + marques données,1.219
-gamma_people,Données — gens,1.14
-gamma_people,SP + densité locale (a) — gens,1.903
-gamma_people,SP + rank-matching (b) — gens,1.95
-gamma_people,SP + split SP/fond (c) — gens,0.617
-gamma_people,"Données, marques mélangées",0.232
-gamma_noeuds,Données,0.515
+observable,variant,value
+D_M (mass dimension) [not discriminant],Data,2.31
+D_M (mass dimension) [not discriminant],SP + local density (a),1.423
+D_M (mass dimension) [not discriminant],SP + rank matching (b),1.458
+D_M (mass dimension) [not discriminant],SP + SP/background split (c),1.403
+D_M (mass dimension) [not discriminant],"Data, shuffled marks",2.276
+D_M (mass dimension) [not discriminant],Poisson + data marks,2.179
+"M_norm (peak, 1=no coupling)",Data,1.738
+"M_norm (peak, 1=no coupling)",SP + local density (a),3.298
+"M_norm (peak, 1=no coupling)",SP + rank matching (b),3.134
+"M_norm (peak, 1=no coupling)",SP + SP/background split (c),2.349
+"M_norm (peak, 1=no coupling)","Data, shuffled marks",1.104
+"M_norm (peak, 1=no coupling)",Poisson + data marks,1.219
+gamma_people,"Data, people",1.14
+gamma_people,"SP + local density (a), people",1.903
+gamma_people,"SP + rank matching (b), people",1.95
+gamma_people,"SP + SP/background split (c), people",0.617
+gamma_people,"Data, shuffled marks",0.232
+gamma_nodes,Data,0.515

@@ -34,7 +34,6 @@ def find_rmax_meaningful(gdf_edge,crs,initial_guess):
     gdf_border_in_crs.plot(ax=ax,color="red")
     circle.plot(ax=ax)
     plt.show()
-    # print(radius)
     return radius
 
 
@@ -69,117 +68,54 @@ def generate_random_point(gdf_edge,size,crs=None,check_gpd=False):
     else:
         return coord
 
-# def compute_DD(gdf_projected):
-#     """Compute the distance between every points in gdf_projected and put i in DD
-#     Distance values are encoded on 32 bits to gain space 
-#     """
-#     coord_data = gdf_projected.get_coordinates().to_numpy()
-#     DD = distance.pdist(coord_data).astype(np.int32)#np.triu(distance.cdist(coord_data,coord_data)).astype(np.int32)
-#     #DD = np.ravel(DD)
-#     #DD = DD[DD != 0]
-#     return DD
-
 def compute_DD(gdf_projected, chunk_size=1000):
+    """Distances between all pairs of points of gdf_projected, as int32.
+
+    Same output as distance.pdist (same condensed order), computed point by
+    point and by blocks of chunk_size to keep the memory footprint low.
     """
-    Version optimisée de compute_DD :
-    - même input : gdf_projected
-    - même output : distances entre toutes les paires, même ordre que pdist
-    - mémoire maîtrisée : calcule par morceaux
-    """
-    
-    # 1. Extraire les coordonnées
     coord = gdf_projected.get_coordinates().to_numpy()
     N = coord.shape[0]
-
-    # 2. Liste des morceaux de distances
     parts = []
-
-    # 3. Parcours selon l'ordre condensé standard de pdist
-    # for i in tqdm(range(N - 1), "Distance between data pairs computation"):
     for i in range(N - 1):
-        pi = coord[i:i+1]  # point i
-        # distances vers j = i+1 .. N-1 par morceaux
+        pi = coord[i:i+1]
         for j0 in range(i+1, N, chunk_size):
             j1 = min(N, j0 + chunk_size)
-            block_j = coord[j0:j1]
-            dist_block = distance.cdist(pi, block_j).ravel()
-            parts.append(dist_block.astype(np.int32))  # comme ta version
-
-    # 4. Concaténer toutes les distances dans le même ordre que pdist
-    DD = np.concatenate(parts)
-
-    return DD
-
-# def compute_one_DR_RR(gdf_projected,gdf_edge, size, crs):
-#     """Compute the distance between every points in generated random points and the points in 
-#     gdf_projected -> array DR
-#     Compute distance between every points in generated random points -> array RR
-#     Distance values are encoded on 32 bits to gain space 
-#     """
-#     coord_random = generate_random_point(gdf_edge, size, crs)#generate_sobol_point(gdf_edge, size, crs)#generate_random_point(gdf_edge, size, crs)
-#     coord_data = gdf_projected.get_coordinates().to_numpy()
-#     DR = distance.cdist(coord_data,coord_random).astype(np.int32)
-#     DR = np.ravel(DR)
-#     DR = DR[DR != 0]
-#     RR = distance.pdist(coord_random).astype(np.int32)#np.triu(distance.cdist(coord_random,coord_random)).astype(np.int32)
-#     return DR,RR
+            dist_block = distance.cdist(pi, coord[j0:j1]).ravel()
+            parts.append(dist_block.astype(np.int32))
+    return np.concatenate(parts)
 
 
 def compute_one_DR_RR(gdf_projected, gdf_edge, size, crs, chunk_size=1000):
-    """
-    Version optimisée en mémoire :
-    - même inputs / outputs
-    - DR et RR retournés comme vecteurs 1D int32 (sans zéros)
-    - RAM minimale grâce au calcul par blocs
-    """
+    """Draw one random catalogue of `size` points inside gdf_edge and return
+    DR (data-random distances, zeros removed) and RR (random-random
+    distances, condensed order), both as 1D int32 arrays.
 
-    # 1) Points aléatoires
+    Computed by blocks of chunk_size to keep the memory footprint low.
+    """
     coord_random = generate_random_point(gdf_edge, size, crs)
     coord_data = gdf_projected.get_coordinates().to_numpy()
-
     N_data = coord_data.shape[0]
     N_rand = coord_random.shape[0]
 
-    # -------------------------
-    # DR : distances data→random
-    # -------------------------
-
     DR_parts = []
-
-    for i0 in range(0, N_data, 1):#, "Distance between data and random points computation"):     # on traite 1 data point à la fois (optimal)
+    for i0 in range(N_data):
         pi = coord_data[i0:i0+1]
-
-        # On calcule les distances vers tous les random points en blocs
         for j0 in range(0, N_rand, chunk_size):
             j1 = min(N_rand, j0 + chunk_size)
-            block = coord_random[j0:j1]
-
-            d = distance.cdist(pi, block).ravel()
+            d = distance.cdist(pi, coord_random[j0:j1]).ravel()
             DR_parts.append(d.astype(np.int32))
-
-    # Concaténer
     DR = np.concatenate(DR_parts)
-    DR = DR[DR != 0]   # comme dans ton code
-
-
-    # -------------------------
-    # RR : distances random→random (pdist optimisé)
-    # -------------------------
+    DR = DR[DR != 0]
 
     RR_parts = []
-
     for i in range(N_rand - 1):
         pi = coord_random[i:i+1]
-
         for j0 in range(i+1, N_rand, chunk_size):
             j1 = min(N_rand, j0 + chunk_size)
-            block = coord_random[j0:j1]
-
-            d = distance.cdist(pi, block).ravel()
+            d = distance.cdist(pi, coord_random[j0:j1]).ravel()
             RR_parts.append(d.astype(np.int32))
-
     RR = np.concatenate(RR_parts)
-
     return DR, RR
 
 
@@ -302,8 +238,6 @@ def compute_two_point_correlation(gdf_projected,gdf_edge,crs,N_run,size,rmin,nbi
     hist_RR = binning_data(RR,nbins,r_edges)
     RR_norm = hist_RR/len(RR)
     del RR
-    # print(rmin,rmax)
-    # print(RR_norm)
     xi= compute_LS_correlation(DD_norm,DR_norm,RR_norm)
     return r_edges,xi
 
@@ -336,7 +270,6 @@ def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     DD = compute_DD(gdf_projected)
     DR,RR = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
     for i in range(N_run-1): #run over several random catalog of size Nr_prime
-        # print(i)
         DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
         RR = np.concatenate((RR,RR_i)) #Accumulate the values in RR,DR
         DR = np.concatenate((DR,DR_i))
@@ -351,23 +284,17 @@ def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     elif scale == "lin":
         r_edges = np.linspace(rmin,rmax,nbins)
     hist_DD = binning_data(DD,nbins,r_edges)
-    # print("max DD", np.max(DD))
     #hist_DD = hist_DD[0:(len(hist_DD)-1)]
     del DD #supress the value after use to gain memory
     hist_DR = binning_data(DR,nbins,r_edges)
     del DR
     hist_RR = binning_data(RR,nbins,r_edges)
     del RR
-    # print("rmin,rmax=",rmin,rmax)
-    # Normalise all histograms to the same length as hist_DD (handles any gap,
-    # not just ±1 as the old code did — e.g. shapes (19,) vs (21,) crashed).
+    # Bring all histograms to the length of hist_DD (any length gap, not only
+    # +-1 as before, e.g. shapes (19,) and (21,) used to crash).
     n = len(hist_DD)
     hist_RR = hist_RR[:n] if len(hist_RR) > n else np.append(hist_RR, np.zeros(n - len(hist_RR), dtype=hist_RR.dtype))
     hist_DR = hist_DR[:n] if len(hist_DR) > n else np.append(hist_DR, np.zeros(n - len(hist_DR), dtype=hist_DR.dtype))
-    # print("normalization DD ",np.sum(hist_DD)*(2/(Nd*(Nd-1))))
-    # print("normalization DR ",np.sum(hist_DR)/((Nd*(Nr))))
-    # print("normalization RR ",np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
-    # print([len(x) for x in (hist_DD,hist_DR,hist_RR)])#,Nd,Nr_prime,Nr)])
     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
     return r_edges,xi
 
@@ -392,21 +319,16 @@ def compute_two_point_correlation_2019_SP(gdf_projected,gdf_edge,crs,N_run,Nr_pr
     elif scale == "lin":
         r_edges = np.linspace(rmin,rmax,nbins)
     hist_DD = binning_data(DD,nbins,r_edges)
-    # print("max DD", np.max(DD))
     #hist_DD = hist_DD[0:(len(hist_DD)-1)]
     del DD
     hist_DR = binning_data(DR,nbins,r_edges)
     del DR
     hist_RR = binning_data(RR,nbins,r_edges)
     del RR
-    # print(rmin,rmax)
     if len(hist_RR) == len(hist_DD)+1:
         hist_RR = hist_RR[0:(len(hist_RR)-1)]
     if len(hist_DR) == len(hist_DD)+1:
         hist_DR = hist_DR[0:(len(hist_DR)-1)]
-    # print(np.sum(hist_DD)*(2/(Nd*(Nd-1))))
-    # print(np.sum(hist_DR)/((Nd*(Nr))))
-    # print(np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
     return r_edges,xi
 
@@ -416,7 +338,6 @@ def compute_two_point_correlation_jack(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     DD = compute_DD(gdf_projected)
     DR,RR = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
     for i in range(N_run-1):
-        # print(i)
         DR_i,RR_i = compute_one_DR_RR(gdf_projected,gdf_edge, Nr_prime, crs)
         RR = np.concatenate((RR,RR_i))
         DR = np.concatenate((DR,DR_i))
@@ -430,18 +351,12 @@ def compute_two_point_correlation_jack(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     del DR
     hist_RR = binning_data(RR,nbins,r_edges)
     del RR
-    # print(rmin,rmax)
     if len(hist_RR) == len(hist_DD)+1:
         hist_RR = hist_RR[0:(len(hist_RR)-1)]
     if len(hist_DR) == len(hist_DD)+1:
         hist_DR = hist_DR[0:(len(hist_DR)-1)]
-    # print(np.sum(hist_DD)*(2/(Nd*(Nd-1))))
-    # print(np.sum(hist_DR)/((Nd*(Nr))))
-    # print(np.sum(hist_RR)*(2/(Nr*(Nr_prime-1))))
     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
     return r_edges,xi
-
-# (gdf_projected,gdf_edge,crs,N_run,Nr_prime,rmin,Nd,rmax,scale,nbins=20):
 
 def PCF_with_variance(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,rmin=False):
     """Compute k different instances of the 2 points correlation function for gdf_projected system, 
@@ -487,11 +402,9 @@ def PCF_with_variance_SP(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbin
     return r_edges,np.array(l_xi)
 
 def generate_sobol_point(gdf_edge,size,crs,check_gpd=False):
-    # print(size)
     sampler = qmc.Sobol(d=2, scramble=True)
     sobol_points = sampler.random(n=size)
     gdf_projected = gdf_edge.to_crs(crs)
-    # print(qmc.discrepancy(sobol_points))
     minx, miny, maxx, maxy = gdf_projected.total_bounds
     for i in range(len(sobol_points)):
         sobol_points[i][0] = sobol_points[i][0]*(maxx-minx)+minx
@@ -502,302 +415,116 @@ def generate_sobol_point(gdf_edge,size,crs,check_gpd=False):
     points_inside = gpd.sjoin(geometry,gdf_projected, how="inner",predicate="within")
     points_inside.plot()
     coord = points_inside.get_coordinates().to_numpy()
-    # print(len(coord))
     if check_gpd:
         return gdf_projected
     else:
         return coord
 
 
-import numpy as np
 
-def compute_two_point_correlation_bootstrap(
-    gdf_projected,
-    gdf_edge,
-    crs,
-    N_run,
-    Nr_prime,
-    rmin,
-    # Nd,
-    rmax,
-    scale,
-    nbins,
-    Nsample,
-    N_real
-):
-    """
-    Version bootstrap :
-    - Tire Nsample points de gdf_projected (sans remplacement)
-    - Calcule la 2PCF sur ce sous-échantillon
-    - Répète N_real fois
-    - Retourne la moyenne et l'écart-type de xi
-    
-    Retour :
-        r_edges
-        xi_mean
-        xi_std
-        all_xi : matrice (N_real, nbins) pour diagnostics
-    """
+def compute_two_point_correlation_bootstrap(gdf_projected, gdf_edge, crs, N_run,
+                                            Nr_prime, rmin, rmax, scale, nbins,
+                                            Nsample, N_real):
+    """2PCF on random subsamples, for large datasets.
 
+    N_real times, Nsample points of gdf_projected are drawn without
+    replacement and their 2PCF is computed with
+    compute_two_point_correlation_2019.
+    Output: r_edges, all_xi (array (N_real, nbins))
+    """
     all_xi = []
-
-    # if len(gdf_projected) == 1:
-    #     number_point = len(gdf_projected.explode())
-    # else:
-    #     number_point = len(gdf_projected)
-
-    # for n_rep, rep in enumerate(range(N_real)):
-    #     print("rep n°", n_rep+1, "/", N_real)
-    for rep in range(N_real):#tqdm(range(N_real), "Bootstrap computation"):
-        # ---------------------
-        # 1) Sous-échantillonnage
-        # ---------------------
+    for _ in range(N_real):
         gdf_sample = gdf_projected.sample(Nsample, replace=False)
-        Nd_s = Nsample   # nombre de points du sous-échantillon
-
-        # ---------------------
-        # 2) Calcul classique de ta 2PCF
-        # ---------------------
         r_edges, xi = compute_two_point_correlation_2019(
-            gdf_sample,
-            gdf_edge,
-            crs,
-            N_run,
-            Nr_prime,
-            rmin,
-            Nd_s,
-            rmax,
-            scale,
-            nbins
-        )
-
+            gdf_sample, gdf_edge, crs, N_run, Nr_prime, rmin, Nsample,
+            rmax, scale, nbins)
         all_xi.append(xi)
-
-    # ---------------------
-    # 3) Moyenne + écart-type
-    # ---------------------
-    all_xi = np.vstack(all_xi)
-    # xi_mean = np.mean(all_xi, axis=0)
-    # xi_std = np.std(all_xi, axis=0)
-
-    return r_edges, all_xi#xi_mean, xi_std, all_xi
+    return r_edges, np.vstack(all_xi)
 
 
-def compute_two_point_correlation_density_groups(
-    gdf_points,
-    path_border_geojson,
-    name,
-    param,
-    Nr_prime,
-    rmin,
-    rmax,
-    Nsample
-):
+def compute_two_point_correlation_density_groups(gdf_points, path_border_geojson,
+                                                 name, param, Nr_prime, rmin,
+                                                 rmax, Nsample,
+                                                 mark="population_density"):
+    """2PCF of groups of points sorted by a mark.
+
+    Points are sorted by `mark`. Three groups of Nsample points are taken at
+    the top of the ranking and three at the bottom, and the 2PCF of each of
+    the 6 groups is computed (N_run, rmax, scale and nbins come from param).
+    Output: r_edges, all_xi (array (6, nbins)), labels, mean mark of each group
     """
-    Version triée par densité :
-    - Trie les points par population_density
-    - Forme 3 bins "top" de taille Nsample
-    - Forme 3 bins "bottom" de taille Nsample
-    - Calcule la 2PCF pour chacun des 6 groupes
-    - Retourne r_edges + matrice (6, nbins) des xi
-    """
-
-#     threshold = param["threshold"]
     N_run = param["N_run"]
-#     size = param["size"]
-#     k = param["k"]
     rmax = param["rmax"]
     scale = param["scale"]
     nbins = param["nbins"]
 
-    crs = crs_selector(name) # Coordinate reference system of the country considered
+    crs = crs_selector(name)
     gdf_projected = gdf_points.to_crs(crs)
     gdf_edge = gpd.read_file(path_border_geojson)
 
-    # -------------------------
-    # 1) Tri des points par densité
-    # -------------------------
-    gdf_sorted = gdf_projected.sort_values("population_density", ascending=False)
+    top = gdf_projected.sort_values(mark, ascending=False)
+    bot = gdf_projected.sort_values(mark, ascending=True)
+    groups = [top.iloc[0:Nsample], top.iloc[Nsample:2*Nsample],
+              top.iloc[2*Nsample:3*Nsample], bot.iloc[2*Nsample:3*Nsample],
+              bot.iloc[Nsample:2*Nsample], bot.iloc[0:Nsample]]
+    labels = [f"Top {mark} (1st bin)", f"Top {mark} (2nd bin)",
+              f"Top {mark} (3rd bin)", f"Low {mark} (3rd bin)",
+              f"Low {mark} (2nd bin)", f"Low {mark} (1st bin)"]
 
-    # Top groups
-    top1 = gdf_sorted.iloc[0:Nsample]
-    top2 = gdf_sorted.iloc[Nsample:2*Nsample]
-    top3 = gdf_sorted.iloc[2*Nsample:3*Nsample]
-
-    # Bottom groups
-    gdf_sorted_bottom = gdf_projected.sort_values("population_density", ascending=True)
-    bot1 = gdf_sorted_bottom.iloc[0:Nsample]
-    bot2 = gdf_sorted_bottom.iloc[Nsample:2*Nsample]
-    bot3 = gdf_sorted_bottom.iloc[2*Nsample:3*Nsample]
-
-    groups = [top1, top2, top3, bot3, bot2, bot1]
-    labels = [
-        "Top density (1st bin)",
-        "Top density (2nd bin)",
-        "Top density (3rd bin)",
-        "Low density (3rd bin)",
-        "Low density (2nd bin)",
-        "Low density (1st bin)"
-    ]
-
-    all_xi = []
-    l_av_bin_metadata = []
-    # -------------------------
-    # 2) Calcul 2PCF pour chaque groupe
-    # -------------------------
+    all_xi, l_av_bin_metadata = [], []
     for gdf_sample in tqdm(groups):
-
-        Nd_s = len(gdf_sample)
-
         r_edges, xi = compute_two_point_correlation_2019(
-            gdf_sample,
-            gdf_edge,
-            crs,
-            N_run,
-            Nr_prime,
-            rmin,
-            Nd_s,
-            rmax,
-            scale,
-            nbins
-        )
-        av_bin_metadata = gdf_sample['population_density'].mean()
-        # print(len(r_edges),len(xi))
+            gdf_sample, gdf_edge, crs, N_run, Nr_prime, rmin, len(gdf_sample),
+            rmax, scale, nbins)
         all_xi.append(xi)
-        l_av_bin_metadata.append(av_bin_metadata)
-
-    all_xi = np.vstack(all_xi)   # shape (6, nbins)
-
-    return r_edges, all_xi, labels, l_av_bin_metadata
+        l_av_bin_metadata.append(gdf_sample[mark].mean())
+    return r_edges, np.vstack(all_xi), labels, l_av_bin_metadata
 
 
-
-def compute_two_point_correlation_density_groups2(
-    gdf_points,
-    path_border_geojson,
-    name,
-    param,
-    Nr_prime,
-    rmin,
-    rmax,
-    Nsample
-):
-    """
-    Version triée par densité :
-    - Trie les points par population_density
-    - Forme 3 bins "top" de taille Nsample
-    - Forme 3 bins "bottom" de taille Nsample
-    - Calcule la 2PCF pour chacun des 6 groupes
-    - Retourne r_edges + matrice (6, nbins) des xi
-    """
-
-#     threshold = param["threshold"]
-    N_run = param["N_run"]
-#     size = param["size"]
-#     k = param["k"]
-    rmax = param["rmax"]
-    scale = param["scale"]
-    nbins = param["nbins"]
-
-    crs = crs_selector(name) # Coordinate reference system of the country considered
-    gdf_projected = gdf_points.to_crs(crs)
-    gdf_edge = gpd.read_file(path_border_geojson)
-
-    # -------------------------
-    # 1) Tri des points par densité
-    # -------------------------
-    gdf_sorted = gdf_projected.sort_values("age", ascending=False)
-
-    # Top groups
-    top1 = gdf_sorted.iloc[0:Nsample]
-    top2 = gdf_sorted.iloc[Nsample:2*Nsample]
-    top3 = gdf_sorted.iloc[2*Nsample:3*Nsample]
-
-    # Bottom groups
-    gdf_sorted_bottom = gdf_projected.sort_values("age", ascending=True)
-    bot1 = gdf_sorted_bottom.iloc[0:Nsample]
-    bot2 = gdf_sorted_bottom.iloc[Nsample:2*Nsample]
-    bot3 = gdf_sorted_bottom.iloc[2*Nsample:3*Nsample]
-
-    groups = [top1, top2, top3, bot3, bot2, bot1]
-    labels = [
-        "Top density (1st bin)",
-        "Top density (2nd bin)",
-        "Top density (3rd bin)",
-        "Low density (3rd bin)",
-        "Low density (2nd bin)",
-        "Low density (1st bin)"
-    ]
-
-    all_xi = []
-    l_av_bin_metadata = []
-    # -------------------------
-    # 2) Calcul 2PCF pour chaque groupe
-    # -------------------------
-    for gdf_sample in tqdm(groups):
-
-        Nd_s = len(gdf_sample)
-
-        r_edges, xi = compute_two_point_correlation_2019(
-            gdf_sample,
-            gdf_edge,
-            crs,
-            N_run,
-            Nr_prime,
-            rmin,
-            Nd_s,
-            rmax,
-            scale,
-            nbins
-        )
-        av_bin_metadata = gdf_sample['age'].mean()
-        # print(len(r_edges),len(xi))
-        all_xi.append(xi)
-        l_av_bin_metadata.append(av_bin_metadata)
-
-    all_xi = np.vstack(all_xi)   # shape (6, nbins)
-
-    return r_edges, all_xi, labels, l_av_bin_metadata
+def compute_two_point_correlation_density_groups2(*args, **kwargs):
+    """Same as compute_two_point_correlation_density_groups with mark="age"."""
+    kwargs.setdefault("mark", "age")
+    return compute_two_point_correlation_density_groups(*args, **kwargs)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 2PCF en 3D (connectomes)
+# ===========================================================================
+# 3D 2PCF (connectomes)
 #
-# Reprend le schéma introduit par Presigny pour le ver (load_worm + crs=None),
-# mais calcule réellement en trois dimensions. Deux points d'attention qui
-# rendent les fonctions 2D ci-dessus inutilisables telles quelles :
-#   - gdf.get_coordinates() renvoie (x, y) et laisse tomber z sans prévenir ;
-#   - gdf_edge.sample_points() tire dans un polygone *plan*, donc le catalogue
-#     aléatoire ne remplit pas le volume.
-# Le comptage de paires passe par un double KD-tree : à N ~ 2e5 points, la
-# matrice des distances (2.8e10 paires) ne tient pas en mémoire.
-# ═══════════════════════════════════════════════════════════════════════════
+# Follows the scheme introduced for the worm (load_worm + crs=None), but
+# really works in three dimensions. The 2D functions above cannot be used
+# as they are, for two reasons:
+#   - gdf.get_coordinates() returns (x, y) and silently drops z;
+#   - gdf_edge.sample_points() draws in a planar polygon, so the random
+#     catalogue does not fill the volume.
+# Pairs are counted with a double KD-tree: for N ~ 2e5 points the distance
+# matrix (2.8e10 pairs) does not fit in memory.
+# ===========================================================================
 
 def load_points_3d(path, columns=("x", "y", "z")):
-    """CSV (ou .zip contenant un CSV) de positions -> GeoDataFrame de POINT Z."""
+    """CSV (or .zip holding a CSV) of positions -> GeoDataFrame of POINT Z."""
     df = pd.read_csv(path, low_memory=False)
     x, y, z = (df[c] for c in columns)
     return gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(x, y, z))
 
 
 def coords_3d(gdf):
-    """Coordonnées (N,3) d'un GeoDataFrame de POINT Z."""
+    """Coordinates (N, 3) of a GeoDataFrame of POINT Z."""
     return gdf.get_coordinates(include_z=True).to_numpy(dtype=float)
 
 
 def compute_rmin_nd(coords):
-    """Distance moyenne au plus proche voisin, échelle sous laquelle la 2PCF n'a
-    plus de sens. Les positions dupliquées (distance nulle) sont écartées."""
+    """Mean nearest-neighbour distance, the scale below which the 2PCF is not
+    meaningful. Duplicated positions (zero distance) are discarded."""
     d, _ = cKDTree(coords).query(coords, k=2, workers=-1)
     nn = d[:, 1]
     return float(nn[nn > 0].mean())
 
 
 def sample_in_hull(hull, size, rng=None):
-    """Points uniformes dans une enveloppe convexe, par rejet dans la boîte
-    englobante (hull.equations donne les demi-espaces : A·x + b <= 0 dedans).
-    Vaut pour toute dimension : c'est l'équivalent volumique de
-    gdf_edge.sample_points(), qui lui reste cantonné au plan."""
+    """Uniform points in a convex hull, by rejection in the bounding box
+    (hull.equations gives the half-spaces, A x + b <= 0 inside).
+    Works in any dimension. It is the volume analogue of
+    gdf_edge.sample_points(), which is restricted to the plane."""
     rng = np.random.default_rng() if rng is None else rng
     A, b = hull.equations[:, :-1], hull.equations[:, -1]
     lo, hi = hull.points.min(axis=0), hull.points.max(axis=0)
@@ -813,10 +540,10 @@ def sample_in_hull(hull, size, rng=None):
 
 
 def pair_counts(A, r_edges, B=None):
-    """Nombre de paires par bin de distance (longueur len(r_edges)-1).
-    B=None : paires internes non ordonnées. Les paires sous r_edges[0] --- dont
-    les paires d'un point avec lui-même et les positions dupliquées --- tombent
-    dans le cumul écarté par np.diff."""
+    """Number of pairs per distance bin (length len(r_edges)-1).
+    B=None gives the unordered internal pairs of A. Pairs below r_edges[0]
+    (including self-pairs and duplicated positions) fall in the cumulative
+    count removed by np.diff."""
     tree_A = cKDTree(A)
     if B is None:
         return np.diff(tree_A.count_neighbors(tree_A, r_edges)) / 2.0
@@ -825,17 +552,17 @@ def pair_counts(A, r_edges, B=None):
 
 def compute_two_point_correlation_nd(coords, hull, r_edges, N_run=5,
                                      Nr_prime=None, rng=None):
-    """2PCF par l'estimateur de Landy-Szalay, schéma des catalogues aléatoires
-    scindés de Keihanen et al. (2019) --- même formule que
-    compute_LS_correlation_2019, appliquée à des comptages KD-tree.
-    La dimension est celle de coords : passer la projection (x,y) d'un jeu 3D
-    donne la 2PCF projetée, avec exactement le même estimateur.
+    """Landy-Szalay 2PCF with the split random catalogues of Keihanen et al.
+    (2019), the same formula as compute_LS_correlation_2019 applied to
+    KD-tree pair counts. The dimension is the one of coords, so passing the
+    (x, y) projection of a 3D dataset gives the projected 2PCF with exactly
+    the same estimator.
     Input:
-        coords: array (N,d) des positions
-        hull: scipy.spatial.ConvexHull délimitant le volume (rôle de gdf_edge)
-        r_edges: bornes des bins de distance
-        N_run: nombre de catalogues aléatoires
-        Nr_prime: taille d'un catalogue (défaut: autant que de données)
+        coords: array (N, d) of positions
+        hull: scipy.spatial.ConvexHull bounding the volume (role of gdf_edge)
+        r_edges: edges of the distance bins
+        N_run: number of random catalogues
+        Nr_prime: size of one catalogue (default: as many as data points)
     Output:
         xi: array (len(r_edges)-1,)"""
     rng = np.random.default_rng() if rng is None else rng
@@ -854,10 +581,10 @@ def compute_two_point_correlation_nd(coords, hull, r_edges, N_run=5,
 
 def PCF_with_variance_nd(coords, hull, r_edges, N_run=5, Nr_prime=None, k=10,
                          Nsample=None, rng=None):
-    """k réalisations de la 2PCF, pour disposer d'une dispersion.
-    Nsample sous-échantillonne les données à chaque réalisation (indispensable
-    au-delà de ~1e5 points) : l'estimateur est un rapport de densités de paires,
-    donc invariant par sous-échantillonnage aléatoire, au bruit près.
+    """k realisations of the 2PCF, to estimate its dispersion.
+    Nsample subsamples the data at each realisation (needed beyond about
+    1e5 points). The estimator is a ratio of pair densities, so it is
+    invariant under random subsampling, up to noise.
     Output: array (k, len(r_edges)-1)"""
     rng = np.random.default_rng() if rng is None else rng
     coords = np.asarray(coords, dtype=float)

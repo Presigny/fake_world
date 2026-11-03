@@ -1,37 +1,33 @@
 """
 powergrid_sp.py
 ===============
-Réseau de transport électrique construit sur le **modèle SP mixte** de ce repo.
+Transmission grid grown on the SP mixture model of this repository.
 
-On reprend le modèle de croissance de `TransmissionGrowthModel`
-(Emery, Bercegol, Aumaître — « A Power Grid Growth Model Based on Rural-Urban
-Differentiation »), et on ne remplace **que la partie spatiale** :
+The growth model of `TransmissionGrowthModel` (Emery, Bercegol, Aumaitre,
+"A Power Grid Growth Model Based on Rural-Urban Differentiation") is reused
+and only its spatial part is replaced:
 
-    modèle du papier            →  ce module
+    growth-model paper            ->  this module
     ------------------------------------------------------------------
-    urbain : décroissance       →  urbain : points du fractal SP
-    exponentielle autour de 11     (`is_sp = True` de build_sp_mixture)
-    centres-villes
-    rural  : uniforme dans le   →  rural  : **identique** (le fond
-    territoire                     aléatoire du mélange SP)
-    connectivité                →  **identique** (plus proche voisin en
-                                   rural, attachement préférentiel parmi
-                                   les `nn_nb` plus proches en urbain,
-                                   2ᵉ arête avec probabilité q)
+    urban: exponential decay      ->  urban: nodes of the SP fractal
+    around 11 city centres            (is_sp = True in build_sp_mixture)
+    rural: uniform in the         ->  rural: identical (uniform
+    territory                         background of the SP mixture)
+    connectivity                  ->  identical (nearest neighbour for
+                                      rural nodes, preferential attachment
+                                      among the nn_nb nearest for urban
+                                      nodes, second edge with probability q)
 
-Les métadonnées (population) sont attribuées par
-`metadata_marks.pop_split_sp_background` — la variante « (c) » du repo :
-les |SP| plus grandes populations empiriques vont aux nœuds structurés, le
-reste au fond, **au hasard à l'intérieur de chaque groupe**. Elles fixent la
-consommation de chaque poste ; la production reprend la distribution
-empirique du registre RTE. Le bilan est équilibré par construction.
+Populations are assigned with metadata_marks.pop_split_sp_background: the
+|SP| largest empirical populations go to the structured nodes, the others to
+the background, at random inside each group. They set the consumption of
+each substation, and production follows the empirical distribution of the
+RTE register. The power balance is zero by construction.
 
-Les pertes Joule sont calculées par un load-flow continu (DC) identique à
-celui de `scripts/build_energy_estimates.py` du papier, avec deux
-corrections documentées dans le notebook 06 (solveur creux, et tensions
-attribuées par rang de flux au lieu d'une file triée arbitraire).
-
-Auteur : Emile Emery, août 2026.
+Joule losses come from a DC load flow identical to the one of
+`scripts/build_energy_estimates.py` in TransmissionGrowthModel, with two
+corrections documented in notebook 06 (sparse solver, and voltages assigned
+by flow rank instead of an arbitrary sorted queue).
 """
 
 from pathlib import Path
@@ -47,26 +43,28 @@ import scipy.sparse.linalg as spla
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = Path(__file__).resolve().parent
-for p in (ROOT, SRC):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+# Only src/ is put on the path, first: the repository root holds an older
+# methods_two_point_correlation.py that must not shadow the one of src/.
+if str(SRC) in sys.path:
+    sys.path.remove(str(SRC))
+sys.path.insert(0, str(SRC))
 
-import synthese_utils as su                      # noqa: E402
+import synthesis_utils as su                     # noqa: E402
 import metadata_marks as mm                      # noqa: E402
 from sp_helpers import (                          # noqa: E402
     build_sp_model, _random_in_territory)
 
-#: dossier du repo TransmissionGrowthModel (symlink data/tgm)
+#: TransmissionGrowthModel repository (expected at data/tgm, see the README)
 TGM = ROOT / "data" / "tgm"
 
-MIN_EDGE_LEN_M = 10.0     # garde-fou : deux nœuds SP peuvent coïncider
+MIN_EDGE_LEN_M = 10.0     # safeguard, two SP nodes can coincide
 
 
 # ===========================================================================
-# 1. Caractéristiques électriques des lignes (identiques au papier)
+# 1. Electrical characteristics of the lines (as in the growth-model paper)
 # ===========================================================================
-# Régression linéaire de r(U) et x(U) sur les valeurs standard françaises
-# (Van Cutsem, « Analyse et fonctionnement des systèmes d'énergie électrique »).
+# Linear regression of r(U) and x(U) on standard French values
+# (Van Cutsem, "Analyse et fonctionnement des systemes d'energie electrique").
 _U_REF = np.array([70e3, 110e3, 220e3, 380e3])
 _R_REF = np.array([0.13, 0.12, 0.08, 0.03])       # Ω/km
 _X_REF = np.array([0.40, 0.40, 0.30, 0.25])       # Ω/km
@@ -75,28 +73,28 @@ _AX, _BX = np.polyfit(_U_REF, _X_REF, 1)
 
 
 def r_lin(U):
-    """Résistance linéique (Ω/m) d'une ligne de tension nominale U (V)."""
+    """Resistance per unit length (Ohm/m) of a line of nominal voltage U (V)."""
     return (_AR * np.asarray(U, dtype=float) + _BR) / 1e3
 
 
 def x_lin(U):
-    """Réactance linéique (Ω/m) d'une ligne de tension nominale U (V)."""
+    """Reactance per unit length (Ohm/m) of a line of nominal voltage U (V)."""
     return (_AX * np.asarray(U, dtype=float) + _BX) / 1e3
 
 
 # ===========================================================================
-# 2. Réseau RTE réel — la référence
+# 2. Real RTE grid, the reference
 # ===========================================================================
 
 def load_rte_reference(tgm=TGM):
-    """Charge le graphe RTE pondéré (`RTE_weighted.joblib`) et ses injections.
+    """Load the weighted RTE graph (`RTE_weighted.joblib`) and its injections.
 
-    Retourne un dict avec :
-      G        : nx.Graph, arêtes portant `length` (m) et `Tension` (V)
-      P        : injections nettes (W), somme nulle
-      P_prod   : production installée par nœud (W), somme = 133.9 GW
-      P_conso  : consommation par nœud (W)
-      volt_mix : tensions des arêtes réelles, ordre décroissant
+    Returns a dict with
+      G        : nx.Graph, edges carry `length` (m) and `Tension` (V)
+      P        : net injections (W), zero sum
+      P_prod   : installed production per node (W), total 133.9 GW
+      P_conso  : consumption per node (W)
+      volt_mix : voltages of the real edges, decreasing order
     """
     import joblib
     sys.path.insert(0, str(tgm / "src"))
@@ -119,16 +117,16 @@ def load_rte_reference(tgm=TGM):
                 P_conso=P_prod - P)
 
 
-#: pertes publiées par RTE, en % de la production installée (voir notebook 06)
+#: losses published by RTE, in % of the installed production (see notebook 06)
 RTE_PUBLISHED_LOSS_PCT = 3.3816425
 
 
 # ===========================================================================
-# 3. Positions des nœuds — les trois modèles spatiaux
+# 3. Node positions, the three spatial models
 # ===========================================================================
 
 def _denormalize(xy_norm, bounds):
-    """Inverse de su.normalize_coords : [0,1]² → coordonnées métriques."""
+    """Inverse of su.normalize_coords, from [0, 1]^2 back to metric coordinates."""
     xmin, ymin, xmax, ymax = bounds
     scale = max(xmax - xmin, ymax - ymin)
     return np.column_stack([xy_norm[:, 0] * scale + xmin,
@@ -136,13 +134,12 @@ def _denormalize(xy_norm, bounds):
 
 
 def nodes_sp_mixture(ds, ld, N_target, seed=0):
-    """Positions du **modèle SP mixte** : fractal SP + fond uniforme.
+    """Node positions of the SP mixture (SP fractal + uniform background).
 
-    Appelle `su.build_sp_mixture(..., return_labels=True)` sans rien changer :
-    le nuage est exactement celui des notebooks 01-04. On dé-normalise
-    simplement vers le CRS métrique du dataset pour mesurer des longueurs.
-
-    Retourne (xy_m, is_urban) où is_urban == is_sp.
+    Calls su.build_sp_mixture(..., return_labels=True) unchanged, so the
+    cloud is the one of notebooks 01-04. It is only mapped back to the
+    metric CRS of the dataset to measure lengths.
+    Returns (xy_m, is_urban) with is_urban == is_sp.
     """
     xy_norm, is_sp = su.build_sp_mixture(
         ds, ld["gdf_edge"], ld["bounds"], ld["geom_norm"],
@@ -152,28 +149,28 @@ def nodes_sp_mixture(ds, ld, N_target, seed=0):
 
 
 def nodes_sp_mixture_fixed(ds, ld, N_target, n_sp, seed=0):
-    """Mélange SP à **nombre de nœuds structurés imposé** — variante « seuil fixé ».
+    """SP mixture with an imposed number of structured nodes ("fixed threshold").
 
-    Identique à `nodes_sp_mixture` sauf sur un point : la proportion de nœuds
-    fractals n'est plus déduite de l'amplitude de la 2PCF (ρ), elle est
-    **posée**. On tire `n_sp` points au hasard dans le fractal SP et on complète
-    à `N_target` avec du fond uniforme.
+    Same as nodes_sp_mixture except that the fraction of fractal nodes is
+    not deduced from the 2PCF amplitude (rho) but imposed: n_sp points are
+    drawn at random in the SP fractal and the rest, up to N_target, is a
+    uniform background.
 
-    Motivation : dans `build_sp_mixture`, la fraction SP vaut √ρ et fluctue de
-    0,15 à 0,21 d'un tirage à l'autre, alors que le modèle du papier pose
-    `urban_rate = 0.2`. Passer `n_sp = 0.2·N_target` (ou le compte urbain tiré
-    par `nodes_cities` à la même graine) met les deux modèles à **structure
-    urbaine de même taille**, ce qui isole l'effet de la *géométrie* des amas
-    de celui de leur *nombre*.
+    In build_sp_mixture the SP fraction is sqrt(rho) and varies from 0.15 to
+    0.21 between draws, while the growth-model paper uses urban_rate = 0.2.
+    Setting n_sp = 0.2 N_target (or the urban count drawn by nodes_cities
+    with the same seed) gives both models an urban structure of the same
+    size, which separates the effect of the cluster geometry from the effect
+    of their number.
 
-    Le fractal est celui de `nodes_sp_mixture` à graine égale (même
-    `np.random.seed(seed)` avant `build_sp_model`) : les deux variantes ne
-    diffèrent donc que par le nombre de points qu'on en retient.
+    The fractal is the one of nodes_sp_mixture for the same seed (same
+    np.random.seed(seed) before build_sp_model), so the two variants only
+    differ by the number of points kept.
 
-    Retourne (xy_m, is_sp), coordonnées métriques, ordre mélangé — la croissance
-    du réseau dépend de l'ordre d'insertion des nœuds.
+    Returns (xy_m, is_sp), metric coordinates in shuffled order (the network
+    growth depends on the insertion order).
     """
-    np.random.seed(seed)                     # build_sp_model utilise le RNG global
+    np.random.seed(seed)                     # build_sp_model uses the global RNG
     m_star_eff = ds["m_star"]
     if N_target < ds["N"]:
         m_star_eff = max(1, round(ds["m_star"] / ds["N"] * N_target))
@@ -194,7 +191,7 @@ def nodes_sp_mixture_fixed(ds, ld, N_target, n_sp, seed=0):
     return xy[perm], is_sp[perm]
 
 
-#: les 11 aires urbaines de plus de 200 000 habitants (papier, build_energy_estimates)
+#: the 11 urban areas above 200,000 inhabitants (growth-model paper, build_energy_estimates)
 POP11 = {1: 2_133_111, 2: 873_076, 3: 522_250, 4: 504_078, 5: 348_085,
          6: 323_204, 7: 302_454, 8: 291_313, 9: 261_804, 10: 236_710,
          11: 225_081}
@@ -202,11 +199,11 @@ POP11 = {1: 2_133_111, 2: 873_076, 3: 522_250, 4: 504_078, 5: 348_085,
 
 def nodes_cities(ld, N_target, popdict=POP11, city_radius_m=5_000,
                  alpha=0.85, urban_rate=0.2, seed=0):
-    """Positions du modèle **du papier** : décroissance exponentielle autour de
-    11 centres-villes tirés au hasard, plus un fond uniforme.
+    """Node positions of the growth-model paper.
 
-    Reprend `grown_graph_pref_attach_poly` (rayon tiré par inversion de la CDF
-    exponentielle), mais en coordonnées métriques uniquement.
+    Exponential decay around 11 randomly placed city centres, plus a uniform
+    background. Same as grown_graph_pref_attach_poly (radius drawn by
+    inverting the exponential CDF), but in metric coordinates only.
     """
     from shapely.geometry import Point
     rng = np.random.default_rng(seed)
@@ -220,7 +217,7 @@ def nodes_cities(ld, N_target, popdict=POP11, city_radius_m=5_000,
     geom = ld["gdf_edge"].geometry.union_all()
     boundary = geom.boundary
 
-    centres = []                       # à plus de 10 rayons de la frontière
+    centres = []                       # more than 10 city radii from the border
     while len(centres) < len(popdict):
         for x, y in _uniform_in_geom(len(popdict), geom, rng):
             if Point(x, y).distance(boundary) > 10 * city_radius_m:
@@ -228,7 +225,7 @@ def nodes_cities(ld, N_target, popdict=POP11, city_radius_m=5_000,
             if len(centres) == len(popdict):
                 break
 
-    pool = _uniform_in_geom(N_target, geom, rng)      # réserve de nœuds ruraux
+    pool = _uniform_in_geom(N_target, geom, rng)      # pool of rural nodes
     xy = np.empty((N_target, 2))
     is_urban = np.zeros(N_target, dtype=bool)
     k_rural = 0
@@ -254,14 +251,14 @@ def nodes_cities(ld, N_target, popdict=POP11, city_radius_m=5_000,
 
 
 def nodes_uniform(ld, N_target, seed=0):
-    """Positions **purement aléatoires** — le témoin sans structure urbaine."""
+    """Uniform random positions, the control without urban structure."""
     rng = np.random.default_rng(seed)
     xy = _uniform_in_geom(N_target, ld["gdf_edge"].geometry.union_all(), rng)
     return xy, np.zeros(N_target, dtype=bool)
 
 
 def _uniform_in_geom(n, geom, rng, factor=6):
-    """Tirage uniforme par rejet de n points dans un polygone métrique."""
+    """Rejection sampling of n uniform points in a metric polygon."""
     from shapely.vectorized import contains
     x0, y0, x1, y1 = geom.bounds
     out, got = [], 0
@@ -276,25 +273,26 @@ def _uniform_in_geom(n, geom, rng, factor=6):
 
 
 # ===========================================================================
-# 4. Croissance du réseau — règles du papier, inchangées
+# 4. Network growth (rules of the growth-model paper, unchanged)
 # ===========================================================================
 
 def grow_network(xy_m, is_urban, proba, nn_nb=3, seed=0):
-    """Fait croître le réseau nœud par nœud (règles de `grown_graph_pref_attach`).
+    """Grow the network node by node (rules of grown_graph_pref_attach).
 
-    - nœud **rural** : arête vers le plus proche voisin déjà placé ;
-    - nœud **urbain** : arête vers le nœud de **degré maximal** parmi les
-      `nn_nb` plus proches déjà placés (attachement préférentiel local) ;
-    - dans les deux cas, une **2ᵉ arête** est ajoutée avec la probabilité
-      `proba` selon la même règle, en excluant la 1ʳᵉ cible.
+    - rural node: edge to the nearest node already placed;
+    - urban node: edge to the node of largest degree among the nn_nb nearest
+      nodes already placed (local preferential attachment);
+    - in both cases, a second edge is added with probability `proba` with
+      the same rule, excluding the first target.
 
-    Différence assumée avec le code du papier : toutes les distances sont
-    métriques. `grown_graph_pref_attach_poly` compare les nœuds ruraux en
-    degrés (lat/lon) et les urbains en mètres, ce qui rend le voisinage rural
-    anisotrope (1° de longitude ≈ 0,67° de latitude en France).
+    Deliberate difference with the original code: all distances are metric.
+    grown_graph_pref_attach_poly compares rural nodes in degrees (lat/lon)
+    and urban nodes in metres, which makes the rural neighbourhood
+    anisotropic (1 degree of longitude is about 0.67 degree of latitude in
+    France).
 
-    Retourne un nx.Graph dont les arêtes portent `length` (m) et `time`
-    (rang de création, utilisé par la règle de tension du papier).
+    Returns an nx.Graph whose edges carry `length` (m) and `time` (creation
+    rank, used by the voltage rule of the paper).
     """
     rng = np.random.default_rng(seed)
     N = len(xy_m)
@@ -309,7 +307,7 @@ def grow_network(xy_m, is_urban, proba, nn_nb=3, seed=0):
         deg[other] += 1
 
     def _pref(cand_idx, d2):
-        """Parmi cand_idx (triés par distance), le premier de degré maximal."""
+        """Among cand_idx (sorted by distance), the first one of maximal degree."""
         dc = deg[cand_idx]
         return int(cand_idx[int(np.argmax(dc == dc.max()))])
 
@@ -342,26 +340,25 @@ def grow_network(xy_m, is_urban, proba, nn_nb=3, seed=0):
 
 
 # ===========================================================================
-# 5. Métadonnées → injections de puissance
+# 5. Populations and power injections
 # ===========================================================================
 
 def assign_population(is_sp, pop_empirical, seed=0):
-    """Attribution « (c) » du repo : split SP / fond, aléatoire dans chaque groupe.
+    """Population split between SP and background nodes, random inside each group.
 
-    Ré-export de `metadata_marks.pop_split_sp_background`, pour garder
-    explicite la chaîne notebook 01 → notebook 06.
+    Re-export of metadata_marks.pop_split_sp_background, to keep the link
+    between notebook 01 and notebook 06 explicit.
     """
     return mm.pop_split_sp_background(is_sp, pop_empirical, seed=seed)
 
 
 def _place_production(N, prod_pool, P_prod_total, rng,
                       prod_where="random", is_urban=None):
-    """Pose les valeurs du registre de production sur les nœuds du modèle.
+    """Place the values of the production register on the model nodes.
 
-    Facteur commun aux recettes `injections` et `injections_marginal_load` :
-    les `len(prod_pool)` valeurs non nulles du registre sont permutées, posées
-    sur autant de nœuds tirés dans le groupe `prod_where`, et renormalisées à
-    `P_prod_total`.
+    Shared by injections and injections_marginal_load: the len(prod_pool)
+    non-zero values of the register are shuffled, placed on as many nodes
+    drawn in the group `prod_where`, and rescaled to P_prod_total.
     """
     n_prod = min(len(prod_pool), N)
 
@@ -372,8 +369,8 @@ def _place_production(N, prod_pool, P_prod_total, rng,
     elif prod_where == "urban":
         cand = np.flatnonzero(np.asarray(is_urban, dtype=bool))
     else:
-        raise ValueError(f"prod_where inconnu : {prod_where}")
-    if len(cand) < n_prod:                       # groupe trop petit : on complète
+        raise ValueError(f"unknown prod_where: {prod_where}")
+    if len(cand) < n_prod:                       # group too small, complete it
         rest = np.setdiff1d(np.arange(N), cand)
         cand = np.concatenate([cand, rng.permutation(rest)[:n_prod - len(cand)]])
     where = rng.choice(cand, size=n_prod, replace=False)
@@ -386,32 +383,31 @@ def _place_production(N, prod_pool, P_prod_total, rng,
 
 def injections(pop, prod_pool, P_prod_total, seed=0, kappa=1.0,
                prod_where="random", is_urban=None):
-    """Construit le vecteur d'injections nettes P (W), de somme nulle.
+    """Net injection vector P (W), with zero sum.
 
-    Reprend l'attribution du papier (`scripts/power_weight_attribution.py`) :
-    P_i = production_i − consommation_i, la consommation totale étant
-    renormalisée sur la production totale installée.
+    Same assignment as the growth-model paper
+    (scripts/power_weight_attribution.py): P_i = production_i - consumption_i,
+    with the total consumption rescaled to the total installed production.
 
-    - **production** : les valeurs non nulles du registre RTE (`prod_pool`, en
-      W) sont posées sur un sous-ensemble de nœuds et renormalisées à
-      `P_prod_total` ;
-    - **consommation** : proportionnelle à `pop ** kappa`.
+    - production: the non-zero values of the RTE register (prod_pool, in W)
+      are placed on a subset of nodes and rescaled to P_prod_total;
+    - consumption: proportional to pop ** kappa.
 
-    Attention à ce que signifie `kappa = 0` : la consommation vaut alors
-    `P_prod_total / N` sur **tous** les nœuds (CV = 0). Ce n'est *pas* la
-    convention des données : l'Agence ORE ne publie qu'un total départemental,
-    que le papier répartit à parts égales entre les postes d'un même
-    département — ce qui donne un escalier à 94 marches (8,9 → 119,1 MW par
-    poste, plus 766 postes à zéro, CV = 0,72), pas une constante. `kappa = 0`
-    aplatit donc *plus* que les données ne le font ; sur la vraie topologie
-    l'écart vaut +0,24 point de pertes (3,20 → 3,44 %), soit cinq fois moins
-    que le coût de la décorrélation position ↔ injection. Pour la marginale
-    réelle sans structure spatiale, voir `injections_marginal_load`.
+    With kappa = 0 the consumption is P_prod_total / N on every node
+    (CV = 0). This is not the convention of the data: Agence ORE only
+    publishes a total per departement, which the paper splits equally
+    between the substations of that departement. This gives a staircase of
+    94 steps (8.9 to 119.1 MW per substation, plus 766 substations at zero,
+    CV = 0.72), not a constant. kappa = 0 therefore flattens the load more
+    than the data do. On the real topology the difference is +0.24 point of
+    losses (3.20 to 3.44%), five times less than the cost of decorrelating
+    positions and injections. For the real marginal without spatial
+    structure, see injections_marginal_load.
 
-    prod_where : "random" (défaut), "rural" ou "urban" — où poser les
-    centrales ; `is_urban` est requis pour les deux derniers.
+    prod_where is "random" (default), "rural" or "urban" (where to place the
+    power plants). is_urban is required for the last two.
 
-    Retourne (P, prod).
+    Returns (P, prod).
     """
     rng = np.random.default_rng(seed)
     N = len(pop)
@@ -424,23 +420,21 @@ def injections(pop, prod_pool, P_prod_total, seed=0, kappa=1.0,
 
 def injections_marginal_load(conso_pool, prod_pool, P_prod_total, N=None,
                              seed=0, prod_where="random", is_urban=None):
-    """Injections avec la **marginale de consommation réelle**, placée au hasard.
+    """Injections with the real consumption marginal, placed at random.
 
-    Recette intermédiaire entre `injections(kappa=0)` — qui aplatit la charge à
-    une constante — et `injections_shuffled` — qui reprend le vecteur net réel
-    tout entier. Ici on garde la production modélisée (registre permuté, posée
-    au hasard) mais on remplace la charge uniforme par un tirage dans la
-    **distribution empirique** de la consommation par poste (`conso_pool`, en
-    W) : les 94 paliers départementaux et les postes à zéro sont présents, avec
-    leur CV de 0,72, mais leur position est neutre.
+    Intermediate between injections(kappa=0), which flattens the load to a
+    constant, and injections_shuffled, which reuses the whole real net
+    vector. The production is modelled (shuffled register, random placement)
+    but the uniform load is replaced by draws from the empirical distribution
+    of the consumption per substation (conso_pool, in W). The 94 departement
+    steps and the zero substations are present, with their CV of 0.72, but
+    their position is neutral.
 
-    Elle sépare donc deux effets que `kappa = 0` confond : celui de la
-    *marginale* de charge et celui de l'*appariement* production/consommation
-    sur un même nœud.
+    It separates two effects that kappa = 0 mixes, the load marginal and the
+    pairing of production and consumption on the same node. The consumption
+    is rescaled to P_prod_total, so sum(P) = 0.
 
-    La consommation est renormalisée à `P_prod_total`, donc Σ P = 0.
-
-    Retourne (P, prod).
+    Returns (P, prod).
     """
     rng = np.random.default_rng(seed)
     pool = np.asarray(conso_pool, dtype=float)
@@ -454,23 +448,22 @@ def injections_marginal_load(conso_pool, prod_pool, P_prod_total, N=None,
 
 
 def injections_shuffled(P_real, seed=0):
-    """Injections nettes = le vecteur empirique **permuté au hasard**.
+    """Net injections given by the empirical vector, randomly shuffled.
 
-    Recette sans métadonnée intermédiaire : on ne modélise ni la population ni
-    la consommation, on reprend la **distribution marginale réelle** de
-    P_i = production_i − consommation_i (registre RTE + ORE) et on la pose au
-    hasard sur les nœuds du modèle. Le modèle spatial ne porte alors plus que
-    la *géométrie* ; tout ce qui touche à l'intensité des injections est
-    exactement celui des données.
+    Neither population nor consumption is modelled. The real marginal of
+    P_i = production_i - consumption_i (RTE register + ORE) is placed at
+    random on the model nodes, so the spatial model only carries the
+    geometry and the injection intensities are exactly those of the data.
 
-    Σ P est conservée par permutation (nulle à la machine près), donc le
-    load-flow reste bien posé. Complément naturel du vecteur *rangé* utilisé au
-    § 7 (`np.sort(P)[::-1]`, la recette implicite du papier) : même marginale,
-    placement neutre au lieu de placement corrélé à l'indice de nœud.
+    sum(P) is preserved by the permutation (zero up to machine precision),
+    so the load flow stays well posed. It complements the sorted vector used
+    in section 7 of notebook 06 (np.sort(P)[::-1], the implicit recipe of
+    the paper): same marginal, neutral placement instead of a placement
+    correlated with the node index.
 
     Parameters
     ----------
-    P_real : array (N,) — injections nettes réelles (W), de somme nulle
+    P_real : array (N,), real net injections (W) with zero sum
     seed   : int
 
     Returns
@@ -482,18 +475,18 @@ def injections_shuffled(P_real, seed=0):
 
 
 # ===========================================================================
-# 6. Load-flow continu et pertes Joule
+# 6. DC load flow and Joule losses
 # ===========================================================================
 
 def _solve_dc(I, J, X, U, P, N):
-    """Résout B'θ' = P' (nœud 0 en référence) et renvoie (flux en W, θ).
+    """Solve B' theta' = P' (node 0 is the reference), return (flows in W, theta).
 
-    **La susceptance vaut b = U²/X, pas 1/X.** Le réseau mélange quatre
-    niveaux de tension : en per-unit, x_pu = X·S_base/U², donc
-    b_pu = U²/(S_base·X) et le flux en watts vaut P = Δθ·U²/X. Prendre
-    b = 1/X revient à supposer toutes les lignes à la même tension : le flux
-    se répartit alors sur les lignes 63 kV au lieu du réseau 400 kV, et les
-    pertes sont sur-estimées d'un facteur ~5 (voir notebook 06, § pièges).
+    The susceptance is b = U^2 / X, not 1 / X. The grid mixes four voltage
+    levels. In per unit, x_pu = X S_base / U^2, so b_pu = U^2 / (S_base X)
+    and the flow in watts is P = dtheta U^2 / X. Taking b = 1 / X amounts to
+    assuming that all lines have the same voltage. The flow then goes through
+    the 63 kV lines instead of the 400 kV grid and the losses are
+    overestimated by a factor of about 5 (see notebook 06, pitfalls section).
     """
     b = U ** 2 / X
     B = spmat.csr_matrix(
@@ -505,30 +498,25 @@ def _solve_dc(I, J, X, U, P, N):
 
 
 def dc_losses(G, P, volt_mix, n_iter=4, voltage_rule="flow"):
-    """Pertes Joule d'un réseau par load-flow continu.
+    """Joule losses of a network from a DC load flow.
 
-    Modèle du papier : chaque arête est une ligne triphasée de résistance
-    R = r(U)·ℓ et de réactance X = x(U)·ℓ, le flux actif se répartit selon
-    B_ij = 1/X_ij, et les pertes valent J_ij = R_ij·P_ij²/U_ij².
+    Each edge is a three-phase line of resistance R = r(U) l and reactance
+    X = x(U) l. The active flow follows the susceptances (see _solve_dc) and
+    the losses are J_ij = R_ij P_ij^2 / U_ij^2.
 
-    `volt_mix` est le **spectre de tensions** à répartir sur les arêtes (p.ex.
-    les tensions réelles des 6 272 lignes RTE). `voltage_rule` fixe la façon
-    de l'attribuer :
+    volt_mix is the voltage spectrum to distribute over the edges (for
+    instance the real voltages of the 6,272 RTE lines). voltage_rule sets how:
+    - "flow" (default): the most loaded line gets the highest voltage, as in
+      the real sizing of a grid (fixed point in about 3 iterations);
+    - "length": the longest line gets the highest voltage;
+    - "given": the real voltage carried by the edge (attribute `Tension`),
+      only available for the real RTE grid;
+    - "time": the edges created first get the highest voltages, which is
+      literally the sorted queue of the paper (queue_voltage.pop() pops from
+      the right). Requires the edge attribute `time`;
+    - "random": random draw (same spectrum, no correlation with the flow).
 
-    - `"flow"` (défaut) : la ligne la plus chargée reçoit la plus haute
-      tension — le dimensionnement réel d'un réseau ; point fixe en ~3
-      itérations ;
-    - `"length"` : la ligne la plus longue reçoit la plus haute tension ;
-    - `"given"` : on lit la tension réelle portée par l'arête (attribut
-      `Tension`) — seulement disponible pour le réseau RTE réel ;
-    - `"time"` : les arêtes créées en premier reçoivent les plus hautes
-      tensions — c'est *littéralement* la file triée du papier
-      (`queue_voltage.pop()` dépile par la droite). Nécessite l'attribut
-      d'arête `time` ;
-    - `"random"` : tirage au hasard (spectre respecté, corrélation avec le
-      flux détruite).
-
-    Retourne dict(J_tot, J, flow, U, theta, L, edges).
+    Returns dict(J_tot, J, flow, U, theta, L, edges).
     """
     nodes = list(G.nodes())
     idx = {n: i for i, n in enumerate(nodes)}
@@ -540,7 +528,7 @@ def dc_losses(G, P, volt_mix, n_iter=4, voltage_rule="flow"):
     M = len(L)
 
     mix = np.sort(np.asarray(volt_mix, dtype=float))[::-1]
-    if len(mix) != M:                       # ré-échantillonnage par quantiles
+    if len(mix) != M:                       # resample by quantiles
         mix = np.quantile(mix, np.linspace(1, 0, M))
 
     if voltage_rule == "given":
@@ -570,7 +558,7 @@ def dc_losses(G, P, volt_mix, n_iter=4, voltage_rule="flow"):
             U = U_new
         flow, theta = _solve_dc(I, Jn, x_lin(U) * L, U, P, N)
     else:
-        raise ValueError(f"voltage_rule inconnue : {voltage_rule}")
+        raise ValueError(f"unknown voltage_rule: {voltage_rule}")
 
     J = r_lin(U) * L * flow ** 2 / U ** 2
     return dict(J_tot=float(J.sum()), J=J, flow=flow, U=U, theta=theta,
@@ -578,32 +566,32 @@ def dc_losses(G, P, volt_mix, n_iter=4, voltage_rule="flow"):
 
 
 def loss_pct(G, P, P_prod_total, volt_mix, **kw):
-    """Pertes Joule en % de la production totale — la grandeur du papier."""
+    """Joule losses in % of the total production (the quantity of the paper)."""
     return 100.0 * dc_losses(G, P, volt_mix, **kw)["J_tot"] / P_prod_total
 
 
 # ===========================================================================
-# 7. Observables structurelles
+# 7. Structural observables
 # ===========================================================================
 
 def total_length_km(G):
-    """Longueur totale de lignes (km)."""
+    """Total line length (km)."""
     return sum(d["length"] for _, _, d in G.edges(data=True)) / 1e3
 
 
 def q_of(G):
-    """Redondance q = (M − N)/N."""
+    """Redundancy q = (M - N) / N."""
     return (G.number_of_edges() - G.number_of_nodes()) / G.number_of_nodes()
 
 
 if __name__ == "__main__":
-    print("— test de fumée powergrid_sp —")
+    print("powergrid_sp smoke test")
     ref = load_rte_reference()
-    print(f"RTE : {ref['G'].number_of_nodes()} nœuds, "
-          f"{ref['G'].number_of_edges()} arêtes, q={q_of(ref['G']):.3f}, "
+    print(f"RTE: {ref['G'].number_of_nodes()} nodes, "
+          f"{ref['G'].number_of_edges()} edges, q={q_of(ref['G']):.3f}, "
           f"L_tot={total_length_km(ref['G']):,.0f} km")
     Ptot = ref["P_prod"].sum()
-    print(f"production installée : {Ptot / 1e9:.1f} GW")
+    print(f"installed production: {Ptot / 1e9:.1f} GW")
     for rule in ("flow", "length", "random"):
-        print(f"  pertes (spectre réel, règle {rule:7s}) : "
+        print(f"  losses (real spectrum, rule {rule:7s}): "
               f"{loss_pct(ref['G'], ref['P'], Ptot, ref['volt_mix'], voltage_rule=rule):6.2f} %")

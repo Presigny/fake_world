@@ -1,28 +1,29 @@
 """
-synthese_utils.py
-=================
-Module consolidé pour la synthèse du projet "Synthetic World".
+synthesis_utils.py
+==================
+Shared pipeline for the cross-dataset comparison of the paper (Table 2 and
+the model-comparison figures).
 
-Il rassemble en un seul endroit la pipeline éprouvée, dispersée jusqu'ici
-dans plusieurs notebooks (`Manring/`, `BSTPP_comparison/`,
-`notebooks/single_sp_cross_2pcf/`) :
+Contents
+--------
+1. DATASETS: configuration and calibrated SP parameters of the 8 datasets
+   (gamma, r0, eta, m*, R_ref). The calibration itself is done by
+   `calibration.py` / `notebooks/00_dataset_calibration.ipynb`.
+2. Normalisation to the unit square, Landy-Szalay 2PCF, power-law fit,
+   Jensen-Shannon divergence between two 2PCFs.
+3. Poisson reference process.
+4. Soneira-Peebles mixture (SP fractal + uniform background), see sp_helpers.
+5. Dataset loading (border, points, normalisation, data 2PCF).
+6. Point-process competitors inferred by SVI with BSTPP (LGCP, Hawkes,
+   Cox-Hawkes) and stochastic bands over independent realisations.
+7. Comparison of all models at a constant number of nodes N.
+8. Population marks: hierarchical SP, marked Hawkes, mark correlation,
+   nearest-neighbour distances, N sweep, and the result cache written by
+   `scripts/compute_all.py`.
 
-  - configuration des datasets réels (DATASETS)
-  - modèle Soneira-Peebles (réexporté depuis src/ et sp_helpers.py)
-  - simulateurs "Manring" légers, pur numpy (LGCP, Hawkes, Neyman-Scott, Cox)
-  - 2PCF de Landy-Szalay normalisée + fit loi de puissance + divergence JSD
-  - chargement d'un dataset (frontière, normalisation, 2PCF des données)
-
-et il ajoute les briques nécessaires aux prochaines étapes :
-
-  - run_multi_instances() ......... TODO stochasticité (moyenne ± écart-type)
-  - compare_at_constant_N() ....... TODO comparaison SP vs Manring à N constant
-
-Toutes les coordonnées "modèle" sont manipulées dans le carré normalisé
-[0,1]² (via normalize_coords / normalize_geometry) pour que la 2PCF et la JSD
-soient comparables entre datasets de tailles physiques différentes.
-
-Auteur : synthèse assemblée à partir du travail de Charley Presigny / Emile Emery.
+All model coordinates live in the normalised square [0, 1]^2 (see
+normalize_coords / normalize_geometry), so that 2PCFs and divergences are
+comparable between territories of different physical sizes.
 """
 
 from pathlib import Path
@@ -42,15 +43,16 @@ from shapely.ops import unary_union
 from shapely import affinity
 
 # ---------------------------------------------------------------------------
-# Chemins : on retrouve src/ (qui contient aussi sp_helpers.py) quel que soit
-# le CWD. Les données sont atteintes via les symlinks de data/ (→ fake_world,
-# fkwrld_emile) : rien n'est dupliqué.
+# Paths: ROOT is the repository root, SRC holds the other modules. Data are
+# expected under ROOT/data (see the README for where to get them).
 # ---------------------------------------------------------------------------
-ROOT = Path(__file__).resolve().parent.parent   # racine fake_world_paper_july_2026/
-SRC = Path(__file__).resolve().parent           # src/ (contient sp_helpers.py)
-for p in (ROOT, SRC):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+ROOT = Path(__file__).resolve().parent.parent
+SRC = Path(__file__).resolve().parent
+# Only src/ is put on the path, first: the repository root holds an older
+# methods_two_point_correlation.py that must not shadow the one of src/.
+if str(SRC) in sys.path:
+    sys.path.remove(str(SRC))
+sys.path.insert(0, str(SRC))
 
 import methods_two_point_correlation as mtpc           # noqa: E402
 from sp_helpers import (                                # noqa: E402
@@ -60,35 +62,27 @@ from sp_helpers import (                                # noqa: E402
 
 SEED = 42
 
-# Paramètres de la 2PCF (cohérents avec les notebooks de comparaison)
+# 2PCF parameters (shared by every comparison notebook)
 N_BINS = 18
 N_RANDOM = 5000
 N_RUNS_2PCF = 5
 
 
 # ===========================================================================
-# 1. Configuration des datasets réels
+# 1. Dataset configuration
 # ===========================================================================
-# Les 4 datasets "principaux" (N < 5000, calcul cdist direct possible).
-# gamma_data, r0_data_m : fit loi de puissance de la 2PCF des données.
-# eta                   : facteur de branchement (Silhouette KMeans).
-# m_star                : nombre de points "structurés" (scan cross-2PCF).
-# R_ref_m               : rayon de référence du SP (~ demi-diagonale du pays).
-#
-# Les paramètres "Manring dérivés" (ls_s, sigma, alpha, amp_s, a0, mu_hawkes)
-# ne sont PAS stockés ici : ils dépendent de l'échelle métrique du territoire
-# et sont calculés au chargement par finalize_manring_params().
+# gamma_data, r0_data_m : power-law fit of the data 2PCF
+# eta                   : branching factor (KMeans silhouette)
+# m_star                : number of "structured" points (cross-2PCF m-scan)
+# R_ref_m               : SP reference radius, 0.5 * perimeter / (2 pi)
+# rmax                  : maximum separation (m) of the calibration 2PCF
+# These values come from the per-dataset calibration
+# (out/00_dataset_calibration_reference.csv).
+
+_FR = ROOT / "data" / "clean_transport_dataset" / "France"
+_FR_BORDER = _FR / "france_nat_earth.geojson"
 
 DATASETS = {
-    "Austria Cities": dict(
-        name="Austria", crs="EPSG:3416",
-        path_border=ROOT / "data" / "map" / "Austria.geojson",
-        path_csv=ROOT / "data" / "cities" / "Austria_cities.csv",
-        threshold_variable="population", threshold=0,
-        N=2254, area_km2=83895,
-        gamma_data=0.789, r0_data_m=1945, rmax=300_000,
-        eta=2, m_star=2142, R_ref_m=188_500,
-    ),
     "Belgium Cities": dict(
         name="Belgium", crs="EPSG:3812",
         path_border=ROOT / "data" / "map" / "Belgium.geojson",
@@ -100,8 +94,8 @@ DATASETS = {
     ),
     "RTE France": dict(
         name="France", crs="EPSG:2154",
-        path_border=ROOT / "data" / "clean_transport_dataset" / "France" / "france_nat_earth.geojson",
-        path_csv=ROOT / "data" / "clean_transport_dataset" / "France" / "postes-electriques-rte.csv",
+        path_border=_FR_BORDER,
+        path_csv=_FR / "postes-electriques-rte.csv",
         threshold_variable="population_density", threshold=1,
         N=4932, area_km2=538401,
         gamma_data=0.931, r0_data_m=12427, rmax=160_000,
@@ -109,20 +103,20 @@ DATASETS = {
     ),
     "Gares France": dict(
         name="France", crs="EPSG:2154",
-        path_border=ROOT / "data" / "clean_transport_dataset" / "France" / "france_nat_earth.geojson",
-        path_csv=ROOT / "data" / "clean_transport_dataset" / "France" / "noeuds_route500_gares.csv",
+        path_border=_FR_BORDER,
+        path_csv=_FR / "noeuds_route500_gares.csv",
         threshold_variable="population_density", threshold=1,
         N=3470, area_km2=538401,
         gamma_data=0.643, r0_data_m=61622, rmax=160_000,
         eta=6, m_star=2896, R_ref_m=496_900,
     ),
-    # ── Gros datasets : N >> 10 000 → sous-échantillonnés à N_data_cap au
-    #    chargement (cdist O(N²) impraticable au-delà ; les modèles hors-SP
-    #    ne passent pas l'échelle au-delà de ~10 000 nœuds). ──────────────────
+    # Large datasets (N >> 10,000) are subsampled to N_data_cap points when
+    # loaded: the O(N^2) cdist becomes impractical beyond that, and the
+    # point-process competitors do not scale beyond about 10,000 nodes.
     "ENEDIS France": dict(
         name="France", crs="EPSG:2154",
-        path_border=ROOT / "data" / "clean_transport_dataset" / "France" / "france_nat_earth.geojson",
-        path_csv=ROOT / "data" / "clean_transport_dataset" / "France" / "postes-electriques-enedis.csv",
+        path_border=_FR_BORDER,
+        path_csv=_FR / "postes-electriques-enedis.csv",
         threshold_variable="population_density", threshold=1,
         N=912_982, area_km2=538_401, N_data_cap=10_000,
         gamma_data=0.954, r0_data_m=7_995, rmax=160_000,
@@ -130,17 +124,17 @@ DATASETS = {
     ),
     "France Communes": dict(
         name="France", crs="EPSG:2154",
-        path_border=ROOT / "data" / "clean_transport_dataset" / "France" / "france_nat_earth.geojson",
-        path_csv=ROOT / "data" / "clean_transport_dataset" / "France" / "noeuds_route500_commune.csv",
+        path_border=_FR_BORDER,
+        path_csv=_FR / "noeuds_route500_commune.csv",
         threshold_variable="population_density", threshold=1,
         N=34_269, area_km2=538_401, N_data_cap=10_000,
-        gamma_data=0.254, r0_data_m=292, rmax=50_000,
+        gamma_data=0.254, r0_data_m=292, rmax=160_000,
         eta=2, m_star=24_647, R_ref_m=496_900,
     ),
     "France Routes": dict(
         name="France", crs="EPSG:2154",
-        path_border=ROOT / "data" / "clean_transport_dataset" / "France" / "france_nat_earth.geojson",
-        path_csv=ROOT / "data" / "clean_transport_dataset" / "France" / "noeuds_route500_routes.csv",
+        path_border=_FR_BORDER,
+        path_csv=_FR / "noeuds_route500_routes.csv",
         threshold_variable="population_density", threshold=1,
         N=897_965, area_km2=538_401, N_data_cap=10_000,
         gamma_data=0.525, r0_data_m=1_744, rmax=160_000,
@@ -161,48 +155,27 @@ DATASETS = {
         path_csv=ROOT / "data" / "clean_transport_dataset" / "Switzerland" / "swiss_stops.csv",
         threshold_variable="population_density", threshold=1,
         N=93_288, area_km2=41_439, N_data_cap=10_000,
-        gamma_data=0.873, r0_data_m=6_690, rmax=100_000,
+        gamma_data=0.873, r0_data_m=6_690, rmax=160_000,
         eta=12, m_star=56_331, R_ref_m=117_700,
     ),
 }
 
-# Datasets "petits" (N < 5000) : tournent en entier, rapides.
-SMALL_DATASETS = ["Austria Cities", "Belgium Cities", "RTE France", "Gares France"]
+# Small datasets (N < 5000), processed in full.
+SMALL_DATASETS = ["Belgium Cities", "RTE France", "Gares France"]
 
-# Cap dur sur le nombre de nœuds pour les modèles hors-SP (cdist O(N²)).
+# Hard cap on the number of nodes for the comparison (O(N^2) cdist).
 N_CAP_MODELS = 10_000
 
 
-def finalize_manring_params(ds, scale_m, amp_s=1.5):
-    """Dérive les paramètres des processus ponctuels à partir des params SP.
-
-    Reproduit (en version "défauts documentés") la calibration des notebooks
-    Manring : ls_s = r0_norm, sigma = r0_norm/2, alpha = m*/N, etc. La
-    calibration fine de amp_s par matching de moments est optionnelle ; la
-    valeur 1.5 reste un bon défaut.
-    """
-    r0_norm = ds["r0_data_m"] / scale_m
-    alpha = float(np.clip(ds["m_star"] / ds["N"], 0.1, 0.9))
-    ds.update(
-        r0_norm=r0_norm,
-        ls_s=max(r0_norm, 1e-3),
-        sigma=max(r0_norm / 2.0, 1e-3),
-        alpha=alpha,
-        amp_s=amp_s,
-        beta=80.0,
-        a0=float(np.log(ds["N"]) - amp_s ** 2 / 2.0),
-        a0_cox=float(np.log(ds["N"]) - amp_s ** 2 / 2.0 + np.log(max(1 - alpha, 1e-6))),
-        mu_hawkes=float(ds["N"] * (1 - alpha)),
-    )
-    return ds
-
-
 # ===========================================================================
-# 2. Normalisation, frontière, 2PCF
+# 2. Normalisation, border, 2PCF
 # ===========================================================================
 
 def normalize_coords(xy_metric, bounds_metric):
-    """Mappe des coordonnées métriques dans [0,1]² (échelle isotrope)."""
+    """Map metric coordinates to [0, 1]^2 with an isotropic scale.
+
+    Returns (xy_norm, scale) where scale is the metric length of the unit side.
+    """
     xmin, ymin, xmax, ymax = bounds_metric
     scale = max(xmax - xmin, ymax - ymin)
     x_norm = (xy_metric[:, 0] - xmin) / scale
@@ -211,7 +184,7 @@ def normalize_coords(xy_metric, bounds_metric):
 
 
 def normalize_geometry(gdf_edge, bounds_metric):
-    """Applique la même transformation à la frontière du territoire."""
+    """Apply the normalize_coords transformation to the territory border."""
     xmin, ymin, xmax, ymax = bounds_metric
     scale = max(xmax - xmin, ymax - ymin)
     geom = unary_union(gdf_edge.geometry)
@@ -221,7 +194,7 @@ def normalize_geometry(gdf_edge, bounds_metric):
 
 
 def rejection_sample_in_boundary(n, geom_norm, rng, max_factor=8):
-    """Tire n points uniformes à l'intérieur du polygone normalisé."""
+    """Draw n uniform points inside the normalised polygon."""
     from shapely.vectorized import contains
     if n <= 0:
         return np.zeros((0, 2))
@@ -239,9 +212,11 @@ def rejection_sample_in_boundary(n, geom_norm, rng, max_factor=8):
 
 def compute_2pcf_norm(xy, geom_norm, n_random=N_RANDOM, n_runs=N_RUNS_2PCF,
                       n_bins=N_BINS):
-    """2PCF de Landy-Szalay en coordonnées normalisées (bins log).
+    """Landy-Szalay 2PCF in normalised coordinates, logarithmic bins.
 
-    Retourne (r_centers, xi) avec xi = (DD - 2DR + RR)/RR.
+    The random catalogue is drawn n_runs times (n_random points each) inside
+    the border and the DR and RR counts are averaged.
+    Returns (r_centers, xi) with xi = (DD - 2DR + RR) / RR.
     """
     DD_raw = cdist(xy, xy)
     DD_raw = np.triu(DD_raw, k=1).ravel()
@@ -279,7 +254,11 @@ def compute_2pcf_norm(xy, geom_norm, n_random=N_RANDOM, n_runs=N_RUNS_2PCF,
 
 
 def fit_powerlaw_norm(r, xi, a=2, b=None):
-    """Fit ξ(r) = (r/r0)^(-gamma). Retourne (gamma, r0) ou (None, None)."""
+    """Fit xi(r) = (r / r0)^(-gamma) on bins a..b-1.
+
+    Only finite positive xi are used. Returns (gamma, r0), or (None, None)
+    when fewer than 3 bins are usable or the fit fails.
+    """
     if b is None:
         b = len(r) - 2
     valid = np.isfinite(xi[a:b]) & (xi[a:b] > 0) & (r[a:b] > 0)
@@ -296,10 +275,12 @@ def fit_powerlaw_norm(r, xi, a=2, b=None):
 
 
 def js_divergence(r_ref, xi_ref, r_mod, xi_mod):
-    """Divergence de Jensen-Shannon entre 2PCF données et modèle.
+    """Jensen-Shannon divergence between a reference 2PCF and a model 2PCF.
 
-    g(r) = max(xi(r)+1, eps) pondéré par r (volume annulaire en log) sert de
-    densité de paires. JSD = 0 → reproduction parfaite de la 2PCF.
+    The model curve is interpolated (in log r) on the reference bins. Each
+    curve is turned into a pair density p(r) proportional to
+    max(xi(r) + 1, eps) * r (the factor r is the annulus weight of a
+    logarithmic bin). JSD = 0 means the two 2PCFs coincide.
     """
     eps = 1e-9
     xi_mod_al = np.interp(
@@ -320,140 +301,34 @@ def js_divergence(r_ref, xi_ref, r_mod, xi_mod):
 
 
 # ===========================================================================
-# 3. Simulateurs "Manring" légers (pur numpy, confinés à la frontière)
+# 3. Poisson reference
 # ===========================================================================
 
-def sample_gp_2d(grid_size, length_scale, amplitude, rng):
-    """Échantillonne un champ gaussien 2D (kernel RBF) sur une grille."""
-    x = np.linspace(0, 1, grid_size)
-    xx, yy = np.meshgrid(x, x)
-    pts = np.column_stack([xx.ravel(), yy.ravel()])
-    sq_dist = cdist(pts, pts, "sqeuclidean")
-    K = amplitude ** 2 * np.exp(-sq_dist / (2 * length_scale ** 2))
-    K += 1e-6 * np.eye(len(pts))
-    L = np.linalg.cholesky(K)
-    z = L @ rng.randn(len(pts))
-    return x, z.reshape(grid_size, grid_size)
-
-
 def simulate_poisson(N_target, geom_norm, seed=None):
-    """Processus de Poisson homogène (référence ξ(r) ≈ 0)."""
+    """Homogeneous Poisson process inside the border (reference, xi(r) ~ 0)."""
     rng = np.random.default_rng(seed)
     return rejection_sample_in_boundary(N_target, geom_norm, rng)
 
 
-def simulate_lgcp(N_target, ls_s, amp_s, a0, geom_norm, grid_size_s=25, seed=None):
-    """Log-Gaussian Cox Process confiné à la frontière."""
-    from shapely.vectorized import contains
-    rng_ = np.random.RandomState(seed)
-    _, fs = sample_gp_2d(grid_size_s, ls_s, amp_s, rng_)
-    lam_max = np.exp(np.max(fs) + a0)
-    bx0, by0, bx1, by1 = geom_norm.bounds
-    collected = []
-    for _ in range(200):
-        n_prop = max(int(lam_max * 5), 10 * N_target)
-        xs = rng_.uniform(bx0, bx1, n_prop)
-        ys = rng_.uniform(by0, by1, n_prop)
-        xi_idx = np.clip((xs * grid_size_s).astype(int), 0, grid_size_s - 1)
-        yi_idx = np.clip((ys * grid_size_s).astype(int), 0, grid_size_s - 1)
-        lam_pts = np.exp(fs[yi_idx, xi_idx] + a0)
-        keep = rng_.uniform(0, lam_max, n_prop) < lam_pts
-        xs, ys = xs[keep], ys[keep]
-        inside = contains(geom_norm, xs, ys)
-        if inside.sum() > 0:
-            collected.append(np.column_stack([xs[inside], ys[inside]]))
-        if sum(len(c) for c in collected) >= N_target * 3:
-            break
-    pts = np.vstack(collected) if collected else np.zeros((0, 2))
-    if len(pts) >= N_target:
-        return pts[rng_.choice(len(pts), size=N_target, replace=False)]
-    return pts
-
-
-def simulate_hawkes_spatial(N_target, mu, alpha, beta, sigma, geom_norm,
-                            seed=None, max_iter=50):
-    """Processus de Hawkes spatial auto-excitant (cascade de Poisson clusters)."""
-    from shapely.vectorized import contains
-    rng_ = np.random.RandomState(seed)
-    T = max(10.0, N_target / max(mu, 0.1) * 3)
-    events = []
-    for _it in range(max_iter):
-        events = []
-        rng_bg = np.random.default_rng((seed or 0) + 1000 + _it)
-        n_bg_want = rng_.poisson(mu * T)
-        bg_xy = rejection_sample_in_boundary(max(n_bg_want, 1), geom_norm, rng_bg)
-        bg_t = np.sort(rng_.uniform(0, T, len(bg_xy)))
-        queue = [(bg_xy[i, 0], bg_xy[i, 1], bg_t[i]) for i in range(len(bg_xy))]
-        events.extend(queue)
-        while queue:
-            px, py, pt = queue.pop(0)
-            n_off = rng_.poisson(alpha)
-            if n_off == 0:
-                continue
-            child_t = pt + rng_.exponential(1.0 / beta, n_off)
-            child_x = px + rng_.normal(0, sigma, n_off)
-            child_y = py + rng_.normal(0, sigma, n_off)
-            in_time = child_t < T
-            if in_time.sum() == 0:
-                continue
-            cx, cy, ct = child_x[in_time], child_y[in_time], child_t[in_time]
-            inside = contains(geom_norm, cx, cy)
-            for i in np.where(inside)[0]:
-                events.append((cx[i], cy[i], ct[i]))
-                queue.append((cx[i], cy[i], ct[i]))
-        if len(events) >= N_target:
-            evs = np.array(events)
-            return evs[rng_.choice(len(evs), size=N_target, replace=False), :2]
-        mu = mu * N_target / max(len(events), 1) * 1.5
-    evs = np.array(events) if events else np.zeros((0, 3))
-    return evs[:N_target, :2]
-
-
-def simulate_neyman_scott(N_target, alpha, sigma, geom_norm, seed=None):
-    """Processus de Neyman-Scott / Thomas (clusters gaussiens), purement spatial."""
-    from shapely.vectorized import contains
-    rng = np.random.default_rng(seed)
-    mu_c = max(N_target / max(alpha, 0.5), 1.0)
-    all_pts = []
-    for _ in range(20):
-        n_centers = max(1, int(rng.poisson(mu_c)))
-        centers = rejection_sample_in_boundary(n_centers, geom_norm, rng)
-        for cx, cy in centers:
-            n_off = int(rng.poisson(alpha))
-            if n_off == 0:
-                continue
-            ox = cx + rng.normal(0, sigma, n_off)
-            oy = cy + rng.normal(0, sigma, n_off)
-            ins = contains(geom_norm, ox, oy)
-            if ins.sum() > 0:
-                all_pts.append(np.column_stack([ox[ins], oy[ins]]))
-        if sum(len(b) for b in all_pts) >= N_target:
-            break
-        mu_c *= 1.5
-    pts = np.vstack(all_pts) if all_pts else np.zeros((0, 2))
-    if len(pts) >= N_target:
-        return pts[rng.choice(len(pts), size=N_target, replace=False)]
-    return pts
-
-
 # ===========================================================================
-# 4. Modèle Soneira-Peebles (mélange SP + fond aléatoire) — réexport + wrapper
+# 4. Soneira-Peebles mixture (SP fractal + uniform background)
 # ===========================================================================
 
 def build_sp_mixture(ds, gdf_edge, bounds, geom_norm, r_data, xi_data,
                      N_target, seed=SEED, verbose=False, return_labels=False):
-    """Construit un nuage SP calibré + fond aléatoire et renvoie ses coords.
+    """Build a calibrated SP fractal plus a uniform background.
 
-    Pipeline (cf sp_helpers) :
-      1. SP complet avec m_SP ≥ m* nœuds dans le territoire
-      2. ajout de n_rand points uniformes pour coller l'amplitude de la 2PCF
-         (ρ = ⟨ξ_data/ξ_SP⟩, n_rand = m_SP·(1/√ρ − 1))
-      3. suppression aléatoire pour atteindre exactement N_target
+    Steps (see sp_helpers):
+      1. full SP with m_SP >= m* nodes inside the territory, where m* is
+         rescaled by N_target / N when N_target < N
+      2. n_rand uniform points are added so that the amplitude of the 2PCF
+         matches the data (rho = <xi_data / xi_SP>, n_rand = m_SP (rho^-1/2 - 1))
+      3. random deletion down to exactly N_target nodes
 
-    Retourne xy_norm (coordonnées normalisées dans [0,1]²). Avec
-    return_labels=True, retourne (xy_norm, is_sp) où is_sp[i] indique si le
-    nœud i vient du fractal SP (True) ou du fond aléatoire (False) — le flux
-    RNG est identique, donc le nuage est le même qu'avant à seed égal.
+    Returns xy_norm (coordinates in [0, 1]^2). With return_labels=True,
+    returns (xy_norm, is_sp) where is_sp[i] tells whether node i comes from
+    the SP fractal (True) or from the background (False). The random stream
+    is the same in both cases.
     """
     np.random.seed(seed)
     m_star_eff = ds["m_star"]
@@ -494,14 +369,17 @@ def build_sp_mixture(ds, gdf_edge, bounds, geom_norm, r_data, xi_data,
 
 
 # ===========================================================================
-# 5. Chargement d'un dataset
+# 5. Dataset loading
 # ===========================================================================
 
 def load_dataset(ds, compute_data_2pcf=True, verbose=True):
-    """Charge frontière + points, normalise, calcule la 2PCF des données.
+    """Load the border and the points, normalise them, compute the data 2PCF.
 
-    Remplit aussi les paramètres Manring dérivés (finalize_manring_params).
-    Retourne un dict 'ld' réutilisable par tous les builders.
+    Large datasets are subsampled to ds["N_data_cap"] points (seed 42). The
+    function also stores in `ds` the normalised correlation length r0_norm and
+    the offspring spread sigma = r0_norm / 2 used by the marked Hawkes process.
+
+    Returns a dict `ld` shared by all the model builders.
     """
     crs = ds["crs"]
     gdf_edge_raw = gpd.read_file(ds["path_border"])
@@ -516,12 +394,11 @@ def load_dataset(ds, compute_data_2pcf=True, verbose=True):
     gdf_proj = gpd.clip(gdf_pts.to_crs(crs), gdf_edge)
     xy_metric_full = gdf_proj.get_coordinates().values
     N_full = len(xy_metric_full)
-    # Métadonnée (population / densité) alignée sur les points, pour la TODO 3.
+    # Mark (population or population density) aligned with the points.
     mvar = ds["threshold_variable"]
     pop_full = (gdf_proj[mvar].to_numpy(dtype=float)
                 if mvar in gdf_proj.columns else None)
 
-    # Sous-échantillonnage des gros datasets (cdist O(N²) impraticable).
     N_cap = ds.get("N_data_cap")
     if N_cap is not None and N_full > N_cap:
         rng_sub = np.random.default_rng(42)
@@ -530,7 +407,7 @@ def load_dataset(ds, compute_data_2pcf=True, verbose=True):
         pop_data = pop_full[sub_idx] if pop_full is not None else None
         N_real = N_cap
         if verbose:
-            print(f"  N_full={N_full:,} → sous-échantillonné à {N_cap:,}")
+            print(f"  N_full={N_full:,} -> subsampled to {N_cap:,}")
     else:
         xy_metric = xy_metric_full
         pop_data = pop_full
@@ -539,10 +416,11 @@ def load_dataset(ds, compute_data_2pcf=True, verbose=True):
     bounds = gdf_edge.total_bounds
     xy_norm, scale_m = normalize_coords(xy_metric, bounds)
     geom_norm = normalize_geometry(gdf_edge, bounds)
-    finalize_manring_params(ds, scale_m)
+    r0_norm = ds["r0_data_m"] / scale_m
+    ds.update(r0_norm=r0_norm, sigma=max(r0_norm / 2.0, 1e-3))
 
     if verbose:
-        print(f"  N={N_real:,}  échelle={scale_m / 1e3:.1f} km")
+        print(f"  N={N_real:,}  scale={scale_m / 1e3:.1f} km")
 
     r_data = xi_data = gamma_fit = r0_fit = None
     if compute_data_2pcf:
@@ -561,10 +439,11 @@ def load_dataset(ds, compute_data_2pcf=True, verbose=True):
 
 
 def data_2pcf_at_N(ld, N_target, seed=SEED):
-    """2PCF d'un extrait de N_target points de données (None si N_target ≥ N_real).
+    """Draw N_target data points and compute their 2PCF.
 
-    Sert à comparer données et modèles **au même N** : on tire un sous-échantillon
-    des données réelles puis on recalcule sa 2PCF.
+    Used to compare data and models at the same N. When N_target >= N_real,
+    the full data and their precomputed 2PCF are returned.
+    Returns (xy, r, xi).
     """
     if N_target >= ld["N_real"]:
         return ld["xy_norm"], ld["r_data"], ld["xi_data"]
@@ -576,77 +455,19 @@ def data_2pcf_at_N(ld, N_target, seed=SEED):
 
 
 # ===========================================================================
-# 6. NOUVEAU — Stochasticité : plusieurs instances, moyenne ± écart-type
+# 6. Point processes inferred by SVI (BSTPP)
 # ===========================================================================
+# LGCP, Hawkes and Cox-Hawkes models are fitted by stochastic variational
+# inference with BSTPP (notebooks/09_bstpp_inference.ipynb). Their posterior
+# samples are saved as .pkl files in BSTPP_RESULTS and reloaded here.
 
-def run_multi_instances(builder, n_instances=10, base_seed=0):
-    """Exécute `builder(seed) -> xy_norm` plusieurs fois et agrège la 2PCF.
-
-    `builder(seed)` doit retourner un tableau (n,2) de coordonnées normalisées
-    (p.ex. une lambda fermant sur build_sp_mixture, simulate_lgcp, …).
-
-    Retourne dict(r, xi_mean, xi_std, xi_all, gammas) où :
-      - xi_mean/xi_std : moyenne et écart-type de ξ(r) sur les instances
-      - xi_all         : (n_instances, n_bins)
-      - gammas         : pente fittée pour chaque instance
-    """
-    # grille de référence : celle de la 1re instance
-    xi_all, gammas, r_ref = [], [], None
-    for k in range(n_instances):
-        xy = builder(base_seed + k)
-        # toutes les instances ont la même frontière donc ~même grille r ;
-        # on aligne par interpolation sur r_ref pour être robuste.
-        r_k, xi_k = run_multi_instances._last_2pcf
-        if r_ref is None:
-            r_ref = r_k
-            xi_all.append(xi_k)
-        else:
-            xi_all.append(np.interp(
-                np.log10(np.clip(r_ref, 1e-12, None)),
-                np.log10(np.clip(r_k, 1e-12, None)),
-                np.nan_to_num(xi_k), left=np.nan, right=np.nan))
-        g, _ = fit_powerlaw_norm(r_k, xi_k)
-        if g is not None:
-            gammas.append(g)
-    xi_all = np.array(xi_all)
-    return dict(
-        r=r_ref,
-        xi_mean=np.nanmean(xi_all, axis=0),
-        xi_std=np.nanstd(xi_all, axis=0),
-        xi_all=xi_all,
-        gammas=np.array(gammas),
-    )
-
-
-def make_2pcf_builder(model_fn, geom_norm):
-    """Enrobe un simulateur pour qu'il renvoie xy_norm ET stocke sa 2PCF.
-
-    Utilisé conjointement avec run_multi_instances : le builder renvoie les
-    coordonnées, et la 2PCF calculée est mémorisée dans
-    run_multi_instances._last_2pcf pour éviter de la recalculer.
-    """
-    def builder(seed):
-        xy = model_fn(seed)
-        run_multi_instances._last_2pcf = compute_2pcf_norm(xy, geom_norm)
-        return xy
-    return builder
-
-
-# ===========================================================================
-# 6bis. Modèles BSTPP inférés par SVI (étalon-or, params depuis les données)
-# ===========================================================================
-# On réutilise les modèles LGCP / Hawkes / Cox Hawkes déjà ajustés par
-# inférence variationnelle dans BSTPP_comparison/ (fichiers .pkl). C'est la
-# calibration *rigoureuse* (bayésienne, sans heuristique) — contrairement aux
-# simulateurs "défauts" ci-dessus (amp_s=1.5 figé…) qui désavantageaient les PP.
-
-BSTPP_CAP = 2000                       # N sur lequel BSTPP a été entraîné
-BSTPP_RESULTS = ROOT / "data" / "bstpp_results"   # symlink → fake_world/BSTPP_comparison
+BSTPP_CAP = 2000                                  # N used for the inference
+BSTPP_RESULTS = ROOT / "out" / "bstpp_results"
 BSTPP_NAMES = ("LGCP", "Hawkes", "Cox Hawkes")
 
 
 def _bstpp_xy(ld, cap=BSTPP_CAP, seed=123):
-    """Reconstruit le sous-échantillon d'entraînement BSTPP (même seed=123)."""
+    """Rebuild the BSTPP training subsample (same seed as the inference)."""
     xy = ld["xy_norm"]
     if len(xy) > cap:
         rng = np.random.default_rng(seed)
@@ -655,11 +476,11 @@ def _bstpp_xy(ld, cap=BSTPP_CAP, seed=123):
 
 
 def load_bstpp_models(name, ld, T_max=365.0, seed=42):
-    """Recharge les 3 modèles BSTPP (LGCP/Hawkes/Cox Hawkes) inférés par SVI.
+    """Reload the three BSTPP models (LGCP, Hawkes, Cox Hawkes) of a dataset.
 
-    Reconstruit chaque modèle avec le même data_df d'entraînement + le domaine
-    [0,1]², puis charge les samples postérieurs depuis le .pkl. Retourne
-    {nom: model | None}. Import de bstpp/jax fait ici (paresseux).
+    Each model is rebuilt with the training data frame and the [0, 1]^2
+    domain, then its posterior samples are read from the .pkl file.
+    Returns {model name: model or None}. bstpp and jax are imported lazily.
     """
     import geopandas as _gpd
     from shapely.geometry import box as _box
@@ -691,18 +512,17 @@ def load_bstpp_models(name, ld, T_max=365.0, seed=42):
             model.load_rslts(str(pkl))
             out[mname] = model
         except Exception as e:
-            print(f"  [BSTPP {mname}] échec reload : {e}")
+            print(f"  [BSTPP {mname}] reload failed: {e}")
             out[mname] = None
     return out
 
 
 def bstpp_simulate_pool(model, geom_norm, n_sim=6, seed=SEED,
                         cap_per_sim=8000):
-    """Simule n_sim patterns depuis la postérieure, filtre dans la frontière.
+    """Simulate n_sim patterns from the posterior and keep points inside the border.
 
-    Retourne un pool de coordonnées normalisées (empilé). simulate() tire un
-    processus ponctuel aléatoire depuis l'intensité postérieure moyenne → les
-    tirages diffèrent d'un appel à l'autre.
+    model.simulate() draws a new point pattern from the mean posterior
+    intensity at each call. Returns the stacked normalised coordinates.
     """
     from shapely.vectorized import contains
     pool = []
@@ -723,18 +543,8 @@ def bstpp_simulate_pool(model, geom_norm, n_sim=6, seed=SEED,
     return np.vstack(pool) if pool else np.zeros((0, 2))
 
 
-def build_bstpp_pools(name, ld, n_sim=6, seed=SEED):
-    """Recharge + simule les 3 modèles BSTPP → {nom: pool_xy_norm}."""
-    models = load_bstpp_models(name, ld)
-    pools = {}
-    for mname, model in models.items():
-        pools[mname] = (bstpp_simulate_pool(model, ld["geom_norm"], n_sim, seed)
-                        if model is not None else np.zeros((0, 2)))
-    return pools
-
-
 def _bstpp_realization(model, geom_norm, N, seed):
-    """Un tirage indépendant d'un modèle BSTPP, sous-échantillonné à N."""
+    """One independent realisation of a BSTPP model, resampled to N points."""
     from shapely.vectorized import contains
     try:
         sim = model.simulate()
@@ -750,7 +560,7 @@ def _bstpp_realization(model, geom_norm, N, seed):
 
 
 def _align_xi(r_src, xi_src, r_ref):
-    """Aligne une courbe (r_src, xi_src) sur la grille r_ref (interp log)."""
+    """Interpolate a curve (r_src, xi_src) on the grid r_ref (in log r)."""
     return np.interp(np.log10(np.clip(r_ref, 1e-12, None)),
                      np.log10(np.clip(r_src, 1e-12, None)),
                      np.nan_to_num(xi_src), left=np.nan, right=np.nan)
@@ -758,13 +568,13 @@ def _align_xi(r_src, xi_src, r_ref):
 
 def stochastic_bands(ds, ld, N, n_instances=10, seed=SEED, bstpp_models=None,
                      models=("SP", "Poisson", "LGCP", "Hawkes", "Cox Hawkes")):
-    """TODO 2 — reproductibilité : pour CHAQUE modèle, n_instances réalisations
-    indépendantes → bande 2PCF (moyenne ± σ), JSD par tirage (incertitude sur la
-    JSD) et un scalaire de largeur de bande (coefficient de variation).
+    """Variability of each model over n_instances independent realisations.
 
-    Un modèle à bande étroite est plus *reproductible* → critère de sélection
-    complémentaire à la JSD moyenne. Retourne {model: dict(r, xi_mean, xi_std,
-    jsd_mean, jsd_std, cv)}.
+    For each model, returns the mean and standard deviation of the 2PCF, the
+    mean and standard deviation of the JSD to the data, and the band width
+    cv = <std(xi) / |mean(xi)|>. A narrow band means a more reproducible model.
+
+    Returns {model: dict(r, xi_mean, xi_std, jsd_mean, jsd_std, cv)}.
     """
     bstpp_models = bstpp_models or {}
     geom_norm, gdf_edge, bounds = ld["geom_norm"], ld["gdf_edge"], ld["bounds"]
@@ -806,26 +616,22 @@ def stochastic_bands(ds, ld, N, n_instances=10, seed=SEED, bstpp_models=None,
 
 
 # ===========================================================================
-# 7. NOUVEAU — Comparaison SP vs processus ponctuels à N constant
+# 7. Comparison of the models at constant N
 # ===========================================================================
 
 def compare_at_constant_N(ds, ld, N_target=None, models=("SP", "Poisson",
                           "LGCP", "Hawkes", "Cox Hawkes"), seed=SEED,
                           bstpp_pools=None):
-    """Compare plusieurs modèles à un même N (nombre de nœuds fixé).
+    """Compare several models at the same number of nodes N_target.
 
-    Principe (comparaison équitable) : on prend **un seul extrait de N_target
-    points des données**, on calcule SA 2PCF, puis chaque modèle génère
-    N_target points dans la même frontière et on mesure la JSD à cette 2PCF de
-    référence. Données et modèles sont donc tous au même N.
+    One sample of N_target data points is drawn and its 2PCF is the
+    reference. Each model then generates N_target points inside the same
+    border and its JSD to the reference is computed, so that data and models
+    all have the same N. SP and Poisson are generated directly. LGCP, Hawkes
+    and Cox Hawkes are resampled from their BSTPP pools ({name: pool_xy}).
+    A model without a pool gets a NaN JSD.
 
-    Calibration des processus ponctuels (LGCP / Hawkes / Cox Hawkes) : si
-    `bstpp_pools` est fourni ({nom: pool_xy}), on utilise les **modèles BSTPP
-    inférés par SVI** (étalon-or) — on sous-échantillonne leur pool simulé à
-    N_target. Sinon on retombe sur les simulateurs heuristiques (amp_s=1.5…),
-    moins équitables. SP et Poisson sont toujours générés directement.
-
-    Retourne dict {model: dict(xy, r, xi, gamma, jsd, n)} + clé "data".
+    Returns {model: dict(xy, r, xi, gamma, jsd, n)} plus the key "data".
     """
     if N_target is None:
         N_target = ld["N_real"]
@@ -838,7 +644,6 @@ def compare_at_constant_N(ds, ld, N_target=None, models=("SP", "Poisson",
         idx = rng.choice(len(pool), size=N_target, replace=len(pool) < N_target)
         return pool[idx]
 
-    # Référence = un extrait de N_target points des données, sa propre 2PCF.
     data_xy, r_data, xi_data = data_2pcf_at_N(ld, N_target, seed=seed)
     out = {"data": dict(xy=data_xy, r=r_data, xi=xi_data, n=len(data_xy))}
     for m in models:
@@ -849,19 +654,8 @@ def compare_at_constant_N(ds, ld, N_target=None, models=("SP", "Poisson",
         elif m == "Poisson":
             xy = simulate_poisson(N_target, geom_norm, seed=seed)
         elif pool is not None and len(pool) >= 10:
-            xy = _from_pool(pool)                       # modèle BSTPP (SVI)
-        elif m == "LGCP":
-            xy = simulate_lgcp(N_target, ds["ls_s"], ds["amp_s"], ds["a0"],
-                               geom_norm, seed=seed)
-        elif m == "Neyman-Scott":
-            xy = simulate_neyman_scott(N_target, ds["alpha"] * 5, ds["sigma"],
-                                       geom_norm, seed=seed)
-        elif m == "Hawkes":
-            xy = simulate_hawkes_spatial(N_target, ds["mu_hawkes"], ds["alpha"],
-                                         ds["beta"], ds["sigma"], geom_norm,
-                                         seed=seed)
+            xy = _from_pool(pool)
         else:
-            # Modèle BSTPP demandé mais pool indisponible → JSD NaN.
             out[m] = dict(xy=np.zeros((0, 2)), r=None, xi=None,
                           gamma=np.nan, jsd=np.nan, n=0)
             continue
@@ -873,23 +667,38 @@ def compare_at_constant_N(ds, ld, N_target=None, models=("SP", "Poisson",
     return out
 
 
+def sweep_constant_N(ds, ld, n_list, models=("SP", "Poisson", "LGCP",
+                     "Hawkes", "Cox Hawkes"), seed=SEED, bstpp_pools=None):
+    """JSD of each model for several values of N.
+
+    The same BSTPP pools are reused for every N. Values of N larger than
+    N_real are clipped to N_real. Returns dict(N=[...], jsd={model: [...]}).
+    """
+    ns = sorted({min(n, ld["N_real"]) for n in n_list})
+    jsd = {m: [] for m in models}
+    for N in ns:
+        res = compare_at_constant_N(ds, ld, N_target=N, models=models,
+                                    seed=seed, bstpp_pools=bstpp_pools)
+        for m in models:
+            jsd[m].append(res[m]["jsd"])
+    return dict(N=np.array(ns), jsd={m: np.array(v) for m, v in jsd.items()})
+
+
 # ===========================================================================
-# 8. TODO 3 — Population / métadonnée (marks)
+# 8. Population marks
 # ===========================================================================
-# Idée : le SP est une *hiérarchie*. Si l'on garde l'arbre complet (et pas
-# seulement les feuilles), les nœuds des premiers niveaux sont rares et
-# centraux → grandes villes/hubs ; les feuilles sont nombreuses → petites
-# unités. On attribue donc une population décroissante avec le niveau, ce qui
-# reproduit naturellement une distribution type loi de puissance (Zipf), et on
-# vérifie que la métadonnée *corrèle avec la structure spatiale* (les nœuds à
-# forte population sont plus agrégés), comme dans les données réelles.
+# The SP model is a hierarchy. If the whole tree is kept (not only the
+# leaves), the nodes of the first levels are few and central, like large
+# cities or hubs, and the leaves are many, like small units. A population
+# that decreases with the level then gives a power-law rank-size
+# distribution, and the marks are correlated with the spatial structure.
 
 def soneira_peebles_tree(lamb, eta, L, R, center, seed=None):
-    """Génère l'arbre SP *complet* (tous les niveaux) avec le niveau de chaque nœud.
+    """Generate the full SP tree (all levels 0..L-1) with the level of each node.
 
-    Contrairement à soneira_peebles_border (feuilles seulement), on accumule
-    les nœuds de tous les niveaux 0..L-1. Retourne (positions (n,2), levels (n,)).
-    Le niveau 0 = premiers enfants de la racine (peu nombreux).
+    Contrary to soneira_peebles_border, which keeps only the leaves, the
+    nodes of every level are kept. Level 0 holds the eta children of the root.
+    Returns (positions (n, 2), levels (n,)).
     """
     rng = np.random.default_rng(seed)
     position = np.asarray(center, dtype=float).reshape(1, 2)
@@ -908,25 +717,26 @@ def soneira_peebles_tree(lamb, eta, L, R, center, seed=None):
 
 
 def population_from_level(levels, eta, pop_max=1e6, slope=1.0):
-    """Population ∝ pop_max / eta^(slope·niveau) — hiérarchie type Zipf."""
+    """Population pop_max / eta^(slope * level)."""
     return pop_max / (eta ** (slope * levels.astype(float)))
 
 
 def build_sp_with_population(ds, gdf_edge, L=None, pop_max=1e6, slope=1.0,
                              max_nodes=12_000, seed=SEED):
-    """Construit un SP hiérarchique marqué par une population (TODO 3).
+    """Hierarchical SP tree marked by a population that decreases with the level.
 
-    Retourne dict(xy_norm, pop, levels) restreint aux nœuds intérieurs au
-    territoire. L est choisi pour ≳ m* nœuds, mais **plafonné** pour que la
-    taille de l'arbre (Σ η^i) reste ≤ max_nodes — sinon η élevé (ex. Suisse
-    η=12) fait exploser le nombre de nœuds. On sous-échantillonne au besoin.
+    L is chosen to give about m* nodes, but capped so that the tree size
+    sum_i eta^i stays below max_nodes (a large eta, e.g. eta = 12 for
+    Switzerland, would otherwise give far too many nodes). Only nodes inside
+    the territory are kept, then subsampled to max_nodes if needed.
+    Returns dict(xy_norm, pop, levels).
     """
     crs = ds["crs"]
     eta, gamma = ds["eta"], ds["gamma_data"]
     lamb = eta ** (1.0 / (2.0 - gamma))
     if L is None:
         L = max(int(np.ceil(np.log(max(ds["m_star"], eta)) / np.log(eta))), 4)
-    # Plafond : plus grand L tel que Σ_{i=1}^{L} η^i ≤ max_nodes
+    # Largest L such that sum_{i=1}^{L} eta^i <= max_nodes
     L_cap, cum = 1, eta
     while L_cap < L and cum + eta ** (L_cap + 1) <= max_nodes:
         L_cap += 1
@@ -937,14 +747,12 @@ def build_sp_with_population(ds, gdf_edge, L=None, pop_max=1e6, slope=1.0,
     pos, lvl = soneira_peebles_tree(lamb, eta, L, ds["R_ref_m"], center, seed)
     pop = population_from_level(lvl, eta, pop_max, slope)
 
-    # Filtre intérieur
     s = gpd.GeoDataFrame(geometry=gpd.points_from_xy(pos[:, 0], pos[:, 1]),
                          crs=crs)
     inside = gpd.sjoin(s, gdf_edge, how="left",
                        predicate="within")["index_right"].notna().to_numpy()
     pos, pop, lvl = pos[inside], pop[inside], lvl[inside]
 
-    # Sécurité : borne le nombre de nœuds (cdist O(N²)).
     if len(pos) > max_nodes:
         rng = np.random.default_rng(seed)
         keep = rng.choice(len(pos), size=max_nodes, replace=False)
@@ -956,7 +764,7 @@ def build_sp_with_population(ds, gdf_edge, L=None, pop_max=1e6, slope=1.0,
 
 
 def fit_zipf_exponent(pop, a=1, b=None):
-    """Exposant s de la loi rang-taille : population ∝ rang^(−s) (fit log-log)."""
+    """Rank-size exponent s, population ~ rank^(-s) (log-log fit on ranks a..b)."""
     p = np.sort(np.asarray(pop, dtype=float))[::-1]
     p = p[p > 0]
     if len(p) < 10:
@@ -970,8 +778,8 @@ def fit_zipf_exponent(pop, a=1, b=None):
 
 def calibrate_sp_slope(ds, gdf_edge, target_zipf, seed=SEED,
                        slopes=np.linspace(0.3, 2.0, 12)):
-    """Choisit le `slope` du SP hiérarchique dont l'exposant rang-taille colle
-    à celui des données (au lieu d'un défaut). Retourne (slope, zipf_sp)."""
+    """Pick the slope of the hierarchical SP whose rank-size exponent is
+    closest to the data. Returns (slope, zipf_sp)."""
     best = None
     for s in slopes:
         spp = build_sp_with_population(ds, gdf_edge, slope=s, seed=seed)
@@ -984,16 +792,14 @@ def calibrate_sp_slope(ds, gdf_edge, target_zipf, seed=SEED,
 
 def simulate_marked_hawkes(N_target, geom_norm, marks_pool, sigma,
                            alpha0=0.6, decay=0.5, seed=None, max_iter=30):
-    """Hawkes spatial **marqué** : la marque (population) module l'auto-excitation
-    (TODO 3, vrai concurrent du SP sur la population).
+    """Marked spatial Hawkes process, the point-process competitor for marks.
 
-    Un nœud de forte population engendre **davantage** d'enfants proches
-    (nombre ∝ marque/⟨marque⟩), qui héritent d'une marque réduite (petites
-    unités). → les fortes populations sont spatialement corrélées entre elles,
-    comme dans les données. Les marques du fond sont tirées de `marks_pool`
-    (≈ distribution empirique des populations → calibré sur les données).
-
-    Retourne (xy (n,2), marks (n,)).
+    Background points get a mark drawn from marks_pool (the empirical
+    population distribution). A node of mark m has on average
+    alpha0 * m / <m> children, spread with a Gaussian kernel of width sigma,
+    and its children inherit the mark decay * m. Large marks are therefore
+    surrounded by many nearby nodes, as in the data.
+    Returns (xy (n, 2), marks (n,)).
     """
     from shapely.vectorized import contains
     rng = np.random.default_rng(seed)
@@ -1006,7 +812,8 @@ def simulate_marked_hawkes(N_target, geom_norm, marks_pool, sigma,
     for _ in range(max_iter):
         bg = rejection_sample_in_boundary(n_bg, geom_norm, rng)
         bg_m = rng.choice(marks_pool, size=len(bg))
-        all_xy.append(bg); all_m.append(bg_m)
+        all_xy.append(bg)
+        all_m.append(bg_m)
         for (px, py), pm in zip(bg, bg_m):
             n_off = rng.poisson(alpha0 * pm / mean_m)
             if n_off == 0:
@@ -1021,7 +828,8 @@ def simulate_marked_hawkes(N_target, geom_norm, marks_pool, sigma,
             break
         n_bg = int(n_bg * 1.4)
 
-    xy = np.vstack(all_xy); marks = np.concatenate(all_m)
+    xy = np.vstack(all_xy)
+    marks = np.concatenate(all_m)
     if len(xy) > N_target:
         idx = rng.choice(len(xy), size=N_target, replace=False)
         xy, marks = xy[idx], marks[idx]
@@ -1029,20 +837,19 @@ def simulate_marked_hawkes(N_target, geom_norm, marks_pool, sigma,
 
 
 def split_by_population(xy, pop, frac_high=0.2):
-    """Sépare les nœuds en (haute, basse) population **par rang**.
+    """Split the nodes into (high, low) population groups by rank.
 
-    Le split par rang (et non par seuil de valeur) garantit deux groupes
-    non-vides même quand la métadonnée comporte beaucoup d'ex æquo (fréquent
-    pour 'population_density' qui prend des valeurs discrètes).
+    Splitting by rank rather than by value keeps both groups non-empty when
+    the mark has many ties (frequent for the discrete population_density).
     """
     n = len(pop)
     n_hi = max(1, min(n - 1, int(round(frac_high * n))))
-    order = np.argsort(pop)[::-1]           # tri décroissant
+    order = np.argsort(pop)[::-1]
     return xy[order[:n_hi]], xy[order[n_hi:]]
 
 
 def _cap_pts(xy, max_pts, seed=SEED):
-    """Sous-échantillonne un nuage à max_pts points (borne cdist O(N²))."""
+    """Subsample a point cloud to max_pts points (bounds the O(N^2) cdist)."""
     if len(xy) <= max_pts:
         return xy
     rng = np.random.default_rng(seed)
@@ -1051,12 +858,12 @@ def _cap_pts(xy, max_pts, seed=SEED):
 
 def marked_clustering_2pcf(xy, pop, geom_norm, frac_high=0.2, min_pts=20,
                            max_pts=6000):
-    """2PCF des nœuds haute-pop vs basse-pop (corrélation métadonnée–structure).
+    """2PCF of the high-population nodes versus the low-population nodes.
 
-    Retourne dict(r_hi, xi_hi, r_lo, xi_lo, gamma_hi, gamma_lo). Si la
-    métadonnée corrèle avec la structure, les nœuds haute-population sont plus
-    agrégés (gamma_hi > gamma_lo). Renvoie des gamma NaN si un groupe est trop
-    petit (< min_pts). Chaque groupe est plafonné à max_pts (cdist O(N²)).
+    If the mark is correlated with the structure, high-population nodes are
+    more clustered (gamma_hi > gamma_lo). Gammas are NaN when a group has
+    fewer than min_pts nodes. Each group is capped at max_pts nodes.
+    Returns dict(r_hi, xi_hi, r_lo, xi_lo, gamma_hi, gamma_lo).
     """
     xy_hi, xy_lo = split_by_population(xy, pop, frac_high)
     if len(xy_hi) < min_pts or len(xy_lo) < min_pts:
@@ -1071,55 +878,21 @@ def marked_clustering_2pcf(xy, pop, geom_norm, frac_high=0.2, min_pts=20,
                 gamma_hi=g_hi, gamma_lo=g_lo)
 
 
-CACHE_DIR = ROOT / "data" / "synthese_cache"      # symlink → fake_world/Synthese/cache
-
-
-def cache_slug(name):
-    return name.lower().replace(" ", "_")
-
-
-def load_cached(name):
-    """Charge le .npz précalculé par compute_all.py pour un dataset (ou None)."""
-    f = CACHE_DIR / f"{cache_slug(name)}.npz"
-    if not f.exists():
-        return None
-    d = np.load(f, allow_pickle=True)
-    out = {}
-    for k in d.files:
-        v = d[k]
-        if v.ndim == 0:                      # scalaire / chaîne stockés en 0-d
-            out[k] = v.item()
-        else:
-            out[k] = v
-    return out
-
-
-def available_cached():
-    """Liste des datasets présents dans le cache (dans l'ordre de DATASETS)."""
-    return [n for n in DATASETS if (CACHE_DIR / f"{cache_slug(n)}.npz").exists()]
-
-
 def mark_correlation_function(xy, marks, geom_norm=None, n_bins=18,
                               max_pts=6000, seed=SEED):
-    """Fonction de corrélation de marque k_mm(r) (Stoyan) — couplage continu.
+    """Mark correlation function k_mm(r) (Stoyan).
 
-    Au lieu d'un split binaire haute/basse population, on pondère **chaque
-    paire** par le produit des marques (populations). Pour les paires séparées
-    d'une distance ~r :
+    Each pair is weighted by the product of its marks. For the pairs at
+    distance about r,
 
-        k_mm(r) = ⟨ m_i · m_j ⟩_{paires à r}  /  ⟨m⟩²
+        k_mm(r) = < m_i m_j >_{pairs at r} / <m>^2.
 
-    Interprétation :
-      - k_mm(r) = 1  → la marque est indépendante de la position (pas de couplage)
-      - k_mm(r) > 1  → les fortes marques sont proches entre elles à l'échelle r
-                       (la métadonnée corrèle avec la structure spatiale)
-      - k_mm(r) < 1  → les fortes marques se repoussent
-
-    Mesure purement intrinsèque (aucun catalogue aléatoire requis) : c'est un
-    ratio sur les paires de données. Retourne (r_centers, k_mm).
+    k_mm = 1 means that marks do not depend on positions, k_mm > 1 that large
+    marks are close to each other at scale r, k_mm < 1 that they repel. No
+    random catalogue is needed. Returns (r_centers, k_mm).
     """
     marks = np.asarray(marks, dtype=float)
-    if len(xy) > max_pts:                       # borne cdist O(N²)
+    if len(xy) > max_pts:
         rng = np.random.default_rng(seed)
         keep = rng.choice(len(xy), size=max_pts, replace=False)
         xy, marks = xy[keep], marks[keep]
@@ -1144,7 +917,7 @@ def mark_correlation_function(xy, marks, geom_norm=None, n_bins=18,
 
 
 def nn_distances(xy):
-    """Distances au plus proche voisin (1-NN) de chaque point."""
+    """Nearest-neighbour distance of each point."""
     if len(xy) < 2:
         return np.zeros(0)
     d, _ = cKDTree(xy).query(xy, k=2)
@@ -1152,21 +925,23 @@ def nn_distances(xy):
 
 
 def _jsd_hist(p, q):
-    """Divergence de Jensen-Shannon entre deux histogrammes (densités)."""
+    """Jensen-Shannon divergence between two histograms."""
     eps = 1e-12
     p = np.asarray(p, float) + eps
     q = np.asarray(q, float) + eps
-    p /= p.sum(); q /= q.sum(); m = 0.5 * (p + q)
+    p /= p.sum()
+    q /= q.sum()
+    m = 0.5 * (p + q)
     kl = lambda a, b: np.sum(a * np.log(a / b))
     return float(0.5 * kl(p, m) + 0.5 * kl(q, m))
 
 
 def nn_comparison(data_xy, model_xys, n_bins=25):
-    """Compare la distribution des distances au plus proche voisin (métrique
-    NEUTRE : le SP n'est pas calibré dessus, contrairement à la 2PCF).
+    """Compare nearest-neighbour distance distributions of data and models.
 
-    Retourne (dict de distributions {r, data, <modèle>}, dict de JSD par modèle).
-    Toutes les distributions partagent les mêmes bins (dérivés des données).
+    The SP model is not calibrated on this observable, contrary to the 2PCF.
+    All distributions share the same logarithmic bins, built from the data.
+    Returns ({"r", "data", <model>: histogram}, {model: JSD}).
     """
     dd = nn_distances(data_xy)
     if len(dd) < 3:
@@ -1174,8 +949,11 @@ def nn_comparison(data_xy, model_xys, n_bins=25):
     rmin, rmax = np.percentile(dd, 0.5), np.percentile(dd, 99.5)
     edges = np.logspace(np.log10(max(rmin, 1e-9)), np.log10(rmax), n_bins + 1)
     centers = np.sqrt(edges[:-1] * edges[1:])
-    hist = lambda x: (lambda h: h / max(h.sum(), 1))(
-        np.histogram(x, bins=edges)[0])
+
+    def hist(x):
+        h = np.histogram(x, bins=edges)[0]
+        return h / max(h.sum(), 1)
+
     dists = {"r": centers, "data": hist(dd)}
     jsd = {}
     for name, xy in model_xys.items():
@@ -1188,32 +966,43 @@ def nn_comparison(data_xy, model_xys, n_bins=25):
     return dists, jsd
 
 
-def sweep_constant_N(ds, ld, n_list, models=("SP", "Poisson", "LGCP",
-                     "Hawkes", "Cox Hawkes"), seed=SEED, bstpp_pools=None):
-    """Balaie N (TODO 1) : JSD de chaque modèle à plusieurs N constants.
+# ---------------------------------------------------------------------------
+# Result cache written by scripts/compute_all.py
+# ---------------------------------------------------------------------------
+CACHE_DIR = ROOT / "out" / "synthesis_cache"
 
-    Réutilise les mêmes pools BSTPP (simulés une seule fois) à chaque N.
-    Retourne dict(N=[...], jsd={model: [...]}) en ne gardant que les N ≤ N_real.
-    """
-    ns = sorted({min(n, ld["N_real"]) for n in n_list})
-    jsd = {m: [] for m in models}
-    for N in ns:
-        res = compare_at_constant_N(ds, ld, N_target=N, models=models,
-                                    seed=seed, bstpp_pools=bstpp_pools)
-        for m in models:
-            jsd[m].append(res[m]["jsd"])
-    return dict(N=np.array(ns), jsd={m: np.array(v) for m, v in jsd.items()})
+
+def cache_slug(name):
+    return name.lower().replace(" ", "_")
+
+
+def load_cached(name):
+    """Load the .npz written by compute_all.py for one dataset (None if absent)."""
+    f = CACHE_DIR / f"{cache_slug(name)}.npz"
+    if not f.exists():
+        return None
+    d = np.load(f, allow_pickle=True)
+    out = {}
+    for k in d.files:
+        v = d[k]
+        out[k] = v.item() if v.ndim == 0 else v      # scalars and strings
+    return out
+
+
+def available_cached():
+    """Datasets present in the cache, in the order of DATASETS."""
+    return [n for n in DATASETS if (CACHE_DIR / f"{cache_slug(n)}.npz").exists()]
 
 
 if __name__ == "__main__":
-    # Petit test de fumée sur le plus petit dataset (Belgium, N=815).
+    # Smoke test on the smallest dataset (Belgium, N = 815).
     name = "Belgium Cities"
     ds = DATASETS[name]
-    print(f"=== Test de fumée : {name} ===")
+    print(f"=== Smoke test: {name} ===")
     ld = load_dataset(ds)
-    res = compare_at_constant_N(ds, ld, models=("SP", "Poisson", "LGCP"))
-    print(f"\nRéférence données : extrait de {res['data']['n']} points")
-    print("Modèle        N      gamma    JSD")
+    res = compare_at_constant_N(ds, ld, models=("SP", "Poisson"))
+    print(f"\nData reference: sample of {res['data']['n']} points")
+    print("Model        N      gamma    JSD")
     for m, r in res.items():
         if m == "data":
             continue
