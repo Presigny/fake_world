@@ -2,7 +2,7 @@
 compute_all.py
 ==============
 Precompute, for every dataset, the heavy results read by
-`notebooks/07_model_comparison.ipynb` (Table 2 of the paper):
+`notebooks/emile_2026/07_model_comparison.ipynb` (Table 2 of the paper):
 
   - comparison of SP, Poisson and the BSTPP point processes at constant N
     (2PCF, JSD, nearest-neighbour distances)
@@ -15,7 +15,7 @@ loading them and computing their 2PCF is slow. The script is incremental:
 each dataset is saved in out/synthesis_cache/<slug>.npz as soon as it is
 done, and datasets already in the cache are skipped.
 
-The BSTPP models must have been fitted first (notebooks/09_bstpp_inference.ipynb).
+The BSTPP models must have been fitted first (notebooks/emile_2026/09_bstpp_inference.ipynb).
 
 Usage:
     python scripts/compute_all.py              # all datasets, N = 3000

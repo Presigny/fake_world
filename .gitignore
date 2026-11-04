@@ -3,7 +3,7 @@ __pycache__/
 out/*_cache/
 
 # Local data, never committed (see the README for where to get them).
-# Austria data must not be distributed with this branch.
+# Raw Austrian data must not be distributed with this branch (results are kept).
 data/cities/Austria_cities.csv
 data/map/Austria.geojson
 data/clean_transport_dataset/France/postes-electriques-enedis.csv

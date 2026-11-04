@@ -8,7 +8,7 @@ Contents
 --------
 1. DATASETS: configuration and calibrated SP parameters of the 8 datasets
    (gamma, r0, eta, m*, R_ref). The calibration itself is done by
-   `calibration.py` / `notebooks/00_dataset_calibration.ipynb`.
+   `calibration.py` / `notebooks/emile_2026/00_dataset_calibration.ipynb`.
 2. Normalisation to the unit square, Landy-Szalay 2PCF, power-law fit,
    Jensen-Shannon divergence between two 2PCFs.
 3. Poisson reference process.
@@ -83,6 +83,17 @@ _FR = ROOT / "data" / "clean_transport_dataset" / "France"
 _FR_BORDER = _FR / "france_nat_earth.geojson"
 
 DATASETS = {
+    # The Austrian city data are not distributed with this repository (see the
+    # README). The entry is kept so that the results can be reproduced locally.
+    "Austria Cities": dict(
+        name="Austria", crs="EPSG:3416",
+        path_border=ROOT / "data" / "map" / "Austria.geojson",
+        path_csv=ROOT / "data" / "cities" / "Austria_cities.csv",
+        threshold_variable="population", threshold=0,
+        N=2254, area_km2=83895,
+        gamma_data=0.789, r0_data_m=1945, rmax=300_000,
+        eta=2, m_star=2142, R_ref_m=188_500,
+    ),
     "Belgium Cities": dict(
         name="Belgium", crs="EPSG:3812",
         path_border=ROOT / "data" / "map" / "Belgium.geojson",
@@ -161,7 +172,7 @@ DATASETS = {
 }
 
 # Small datasets (N < 5000), processed in full.
-SMALL_DATASETS = ["Belgium Cities", "RTE France", "Gares France"]
+SMALL_DATASETS = ["Austria Cities", "Belgium Cities", "RTE France", "Gares France"]
 
 # Hard cap on the number of nodes for the comparison (O(N^2) cdist).
 N_CAP_MODELS = 10_000
@@ -458,7 +469,7 @@ def data_2pcf_at_N(ld, N_target, seed=SEED):
 # 6. Point processes inferred by SVI (BSTPP)
 # ===========================================================================
 # LGCP, Hawkes and Cox-Hawkes models are fitted by stochastic variational
-# inference with BSTPP (notebooks/09_bstpp_inference.ipynb). Their posterior
+# inference with BSTPP (notebooks/emile_2026/09_bstpp_inference.ipynb). Their posterior
 # samples are saved as .pkl files in BSTPP_RESULTS and reloaded here.
 
 BSTPP_CAP = 2000                                  # N used for the inference

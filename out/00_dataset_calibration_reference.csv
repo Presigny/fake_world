@@ -1,4 +1,5 @@
 name,source_notebook,N,area_km2,R_ref_m,rmax,gamma,gamma_err,r0_m,r0_err_m,eta,silhouette,m_min,m_max,m_star,lamb,L,m_SP,gamma_SP,gamma_SP_err,rho,n_rand,final_SP,final_random
+Austria Cities,single_sp_cross_2pcf/austria_cities_multi_sp.ipynb,2254,83895,188500,300000,0.789,0.0938,1945,269,2,0.4838,112,2142,2142,1.772,12,2621,0.8467,0.019,0.2056,3159,1030,1224
 Belgium Cities,single_sp_cross_2pcf/belgium_cities_multi_sp.ipynb,815,30659,102700,200000,0.8078,0.1247,3083,860,2,0.4663,40,775,718,1.789,10,988,0.8879,0.0334,0.1665,1433,333,482
 RTE France,single_sp_cross_2pcf/french_RTE_multi_sp.ipynb,4932,538401,496900,160000,0.9305,0.0175,12427,171,6,0.4453,246,4686,3661,5.341,5,6636,0.9162,0.1243,0.0832,16375,1426,3506
 Gares France,single_sp_cross_2pcf/french_train_station_multi_sp.ipynb,3470,538401,496900,160000,0.643,0.0561,61622,10291,6,0.4722,173,3297,2896,3.745,5,5508,0.6262,0.0498,0.2665,5161,1806,1664
