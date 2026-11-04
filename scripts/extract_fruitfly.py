@@ -17,7 +17,7 @@ from scipy.optimize import curve_fit
 from shapely.geometry import Polygon
 import ast
 
-# coming form this dataset: https://github.com/bluevex/elegans-atlas/blob/main/LowResAtlasWithHighResHeadsAndTails.csv
+# coming form this dataset: https://codex.flywire.ai/api/download?dataset=fafb
 
 path_neurons = Path.cwd().parent/"data/fruitfly/coordinates.csv"
 
@@ -36,10 +36,10 @@ polygon_geom = Polygon(gpd.points_from_xy(df.x, df.y,df.z))
 polygon = gpd.GeoDataFrame(index=[0],geometry=[polygon_geom]) 
 res = polygon.convex_hull
 
-# path_map = Path.cwd().parent/"data/worm/"
-# res.to_file(path_map/"c_elegans.geojson", driver="GeoJSON")
-# path_neurons = Path.cwd().parent/"data/worm/"
-# gdf.to_csv(path_neurons/"neurons.csv")
+path_map = Path.cwd().parent/"data/fruitfly/"
+res.to_file(path_map/"fruitfly.geojson", driver="GeoJSON")
+path_neurons = Path.cwd().parent/"data/fruitfly/"
+gdf.to_csv(path_neurons/"neurons.csv")
 
 
 
