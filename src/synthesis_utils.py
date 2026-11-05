@@ -6,9 +6,9 @@ the model-comparison figures).
 
 Contents
 --------
-1. DATASETS: configuration and calibrated SP parameters of the 8 datasets
+1. DATASETS: configuration and calibrated SP parameters of the 9 datasets
    (gamma, r0, eta, m*, R_ref). The calibration itself is done by
-   `calibration.py` / `notebooks/emile_2026/00_dataset_calibration.ipynb`.
+   `calibration.py` and the notebooks of `notebooks/emile_2026/calibration/`.
 2. Normalisation to the unit square, Landy-Szalay 2PCF, power-law fit,
    Jensen-Shannon divergence between two 2PCFs.
 3. Poisson reference process.

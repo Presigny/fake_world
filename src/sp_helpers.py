@@ -3,8 +3,8 @@ sp_helpers.py
 =============
 Soneira-Peebles (SP) model and 2PCF helpers used by the calibration pipeline.
 
-Calibration overview (see `calibration.py` and notebook 00)
------------------------------------------------------------
+Calibration overview (see `calibration.py`)
+------------------------------------------
 1. Power-law fit of the data 2PCF, xi(r) = (r/r0)^(-gamma).
 2. Branching factor eta from a k-means silhouette scan.
 3. m-scan on the data sorted by a node attribute:

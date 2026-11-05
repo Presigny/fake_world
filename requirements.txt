@@ -12,6 +12,7 @@ scikit-learn==1.8.0
 networkx==3.6.1
 joblib==1.5.3
 tqdm==4.67.1
+powerlaw==1.5          # notebook 11 only
 jupyter==1.1.1
 nbconvert==7.17.0
 ipykernel==7.1.0

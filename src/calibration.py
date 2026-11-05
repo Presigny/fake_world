@@ -20,17 +20,17 @@ Steps (one function each):
      n_rand = m_SP (rho^-1/2 - 1), then random deletion down to N nodes
 
 `calibrate(name)` runs the whole chain for one entry of DATASETS.
-Notebook 00 shows each step with its figures, and scripts/calibrate_all.py
-runs all datasets and writes out/00_dataset_calibration.csv.
+The original runs are the notebooks of notebooks/emile_2026/calibration/,
+and scripts/calibrate_all.py runs all datasets and writes out/00_dataset_calibration.csv.
 
 The random catalogues of the 2PCF are drawn without a fixed seed (as in
 methods_two_point_correlation), so two runs differ slightly. The values
 obtained for the paper are kept in out/00_dataset_calibration_reference.csv.
 
 The amplitude ratio rho depends strongly on the SP draw. On Belgium, with
-m* fixed, the mean ratio of ten SP draws spreads over about 0 to 0.3 (0.12 +/-
-0.09 in the stored run of notebook 00), and it can even be negative, in which
-case rho is clipped to 1e-4. Section 6bis of notebook 00 shows this spread.
+m* fixed, the mean ratio of ten SP draws goes from -0.03 to 2.3 in notebook
+11, and the values outside [0, 1] are clipped to 1e-4 or 1. The median ratio
+is much more stable (0.06 to 0.11).
 """
 
 from pathlib import Path

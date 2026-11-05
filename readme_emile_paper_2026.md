@@ -34,12 +34,12 @@ short list of results. Outputs are kept, except in notebook 09 (see below).
 
 | Notebook | Result | Paper |
 |----------|--------|-------|
-| `00_dataset_calibration` | calibration chain of `calibration.py`, step by step, on Belgium | Sec. 3.1 |
 | `calibration/*.ipynb` | original per-dataset calibration runs (March 2026), outputs kept | Table 1 |
 | `07_model_comparison` | SP mixture against Poisson, LGCP, Hawkes and Cox-Hawkes on the nine datasets | Table 2, Fig. 1 |
 | `08_benchmark_complexity` | cost of each model as a function of N | Fig. 2 |
 | `09_bstpp_inference` | SVI fits of LGCP, Hawkes and Cox-Hawkes with BSTPP | Table 2 |
 | `10_gamma_consistency` | γ_cal against the exponent of the comparison settings, exponent of the mixture, ranks over 10 realisations | Sec. 4, Limitations |
+| `11_calibration_fits` | least squares against maximum likelihood for γ_cal, sensitivity of ρ to the SP draw | Sec. 3.2, Limitations |
 | `01_metadata_generative_model` | population marks given to the SP nodes from the local density | not in the paper |
 | `02_metadata_observables` | observables that include the population (M_norm, people 2PCF) | not in the paper |
 | `03_estimator_comparison_belgium`, `_austria` | effect of the density estimator (k-NN or fixed radius) on the population coupling | not in the paper |
@@ -47,7 +47,7 @@ short list of results. Outputs are kept, except in notebook 09 (see below).
 | `05bis_fly_sp3d` | 3D SP model of the fruit fly | not in the paper |
 | `06_powergrid_sp_joule` | grid growth and Joule losses on SP nodes, against the RTE grid | not in the paper |
 
-There is no notebook 04. The two notebooks 03 run the same code
+There is no notebook 00 or 04. The two notebooks 03 run the same code
 (`DATASET_NAME`) on the two city catalogues with a real population.
 
 ### Austrian cities
@@ -115,11 +115,11 @@ Two points matter when comparing with `out/00_dataset_calibration_reference.csv`
   `methods_two_point_correlation`), so γ and m* change slightly from one run
   to the next.
 - The amplitude ratio ρ depends strongly on the SP draw. On Belgium, the mean
-  ratio of ten SP draws spreads over about 0 to 0.3 (0.12 ± 0.09 in the stored
-  run of notebook 00), and one draw gives a negative mean ratio, which is
-  clipped to 1e-4. The SP draw is therefore seeded (`--seed`, 42 by
-  default), `calibration.py` prints a warning when ρ is clipped, and section 6bis
-  of notebook 00 shows the spread over ten seeds.
+  ratio of ten SP draws goes from −0.03 to 2.3 in notebook 11, and the values
+  outside [0, 1] are clipped (to 1e-4 or 1). The median ratio is much more
+  stable (0.06 to 0.11). The SP draw is therefore seeded (`--seed`, 42 by
+  default), `calibration.py` prints a warning when ρ is clipped, and notebook 11
+  shows the spread over ten seeds.
 
 ### Calibration exponent and comparison exponent
 
