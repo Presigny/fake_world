@@ -20,14 +20,6 @@ plot_dir = out_dir / Path("plot")
 
 parser = argparse.ArgumentParser(description="Compute the 2PCF")
 
-parser.add_argument("--name", type=str, default="Sweden")
-parser.add_argument("--threshold", type=int, default=1)
-parser.add_argument("--N_run", type=int, default=10)
-parser.add_argument("--size", type=int, default=1000)
-parser.add_argument("--k", type=int, default=3)
-parser.add_argument("--rmax", type=float, default=None)
-parser.add_argument("--scale", type=str, default="log", choices=["log", "linear"])
-parser.add_argument("--nbins", type=int, default=20)
 
 args = parser.parse_args()
 

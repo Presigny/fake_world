@@ -9,6 +9,7 @@ import argparse
 import numpy as np
 import geopandas as gpd
 import os
+
     
 # Bookkeeping of important path in the project
 path_data = Path("/media/utente/LaCie/fake_world_data/")
@@ -18,16 +19,16 @@ data_map = data_dir / "map"
 data_2pcf = data_dir/"2pcf"
 data_fit = data_dir /"fit"
 out_dir = path_data #Path().cwd().parent/Path("out")
-plot_dir = out_dir / Path("plot_powerlaw")
+plot_dir = out_dir / Path("plot_generated_2pcf")
 ##Create directories and path to save data
 
 
 parser = argparse.ArgumentParser(description="Fit a power law to the 2pcf")
 
-parser.add_argument("--name", type=str, default="Austria")
+parser.add_argument("--name", type=str, default="Sweden")
 parser.add_argument("--threshold", type=int, default=1)
-parser.add_argument("--N_run", type=int, default=10)
-parser.add_argument("--size", type=int, default=4500)
+parser.add_argument("--N_run", type=int, default=20)
+parser.add_argument("--size", type=int, default=1900)
 parser.add_argument("--k", type=int, default=3)
 parser.add_argument("--rmax", type=float, default=None)
 parser.add_argument("--scale", type=str, default="log", choices=["log", "linear"])
@@ -44,7 +45,7 @@ rmax = args.rmax
 scale = args.scale
 nbins = args.nbins
 
-diminish_radius = 1 # multiplication factor for the maximum radius, 
+diminish_radius = 0.75 # multiplication factor for the maximum radius, 
 #to be lowered if the SP does not fit inside the considered border quick enough
 
 #Load the polygon file for border
@@ -74,7 +75,7 @@ rmin= np.min(r_edges)
 iteration_pure_SP = 1 #number of try to set the basis of the SOneira-Peebles 2pcf
 number_of_try_for_each_parameter = 1 #number of generated 2pcf SP+random by set of paraemters to compare with the reference
 
-save_dist,save_L,save_random = fcsp.find_the_fit_parameters_SP_random(r_edges,l_xi,l_cluster,N,R,gdf_edge,crs,rmax,number_of_try_for_each_parameter,iteration_pure_SP,gamma,N_run,size,k,scale,nbins,rmin,name)
+save_dist,save_L,save_random = fcsp.find_the_fit_parameters_SP_random(r_edges,l_xi,l_cluster,N,R,gdf_edge,crs,rmax,number_of_try_for_each_parameter,iteration_pure_SP,gamma,N_run,size,k,scale,nbins,rmin,name,plot_dir)
 
 d_load["save_dist"] = save_dist
 d_load["L"] = save_L
