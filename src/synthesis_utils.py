@@ -9,10 +9,14 @@ Contents
 1. DATASETS: configuration and calibrated SP parameters of the 9 datasets
    (gamma, r0, eta, m*, R_ref). The calibration itself is done by
    `calibration.py` and the notebooks of `notebooks/emile_2026/calibration/`.
-2. Normalisation to the unit square, Landy-Szalay 2PCF, power-law fit,
+2. Normalisation to the unit square, Landy-Szalay 2PCF (single chain:
+   the one of methods_two_point_correlation / calibration.py, in metres,
+   with the minimum-pairs fit window of sp_helpers.fit_window),
    Jensen-Shannon divergence between two 2PCFs.
 3. Poisson reference process.
-4. Soneira-Peebles mixture (SP fractal + uniform background), see sp_helpers.
+4. Soneira-Peebles mixture (SP fractal + uniform background), see
+   sp_helpers: N-dimensional generator with dim = 2, amplitude ratio
+   estimated in log.
 5. Dataset loading (border, points, normalisation, data 2PCF).
 6. Point-process competitors inferred by SVI with BSTPP (LGCP, Hawkes,
    Cox-Hawkes) and stochastic bands over independent realisations.
@@ -22,8 +26,14 @@ Contents
    `scripts/compute_all.py`.
 
 All model coordinates live in the normalised square [0, 1]^2 (see
-normalize_coords / normalize_geometry), so that 2PCFs and divergences are
-comparable between territories of different physical sizes.
+normalize_coords / normalize_geometry), because the BSTPP models are fitted
+in that frame. The 2PCFs are nevertheless computed in metres by
+`compute_2pcf`, which maps the points back to the metric CRS and calls the
+calibration chain (PCF_with_variance: 20 logarithmic bins from the mean
+nearest-neighbour distance to the rmax of the dataset, 5 x 7000 random
+points, k = 3 realisations, xi at the upper edge of the bin). The
+cross-dataset comparisons use the Jensen-Shannon divergence, which does
+not depend on the unit of r.
 """
 
 from pathlib import Path
@@ -55,17 +65,18 @@ if str(SRC) in sys.path:
 sys.path.insert(0, str(SRC))
 
 import methods_two_point_correlation as mtpc           # noqa: E402
+import calibration as cal                               # noqa: E402
 from sp_helpers import (                                # noqa: E402
-    soneira_peebles_border, get_inside_points, build_sp_model,
-    power_law, _random_in_territory,
+    build_sp_model, lambda_of_gamma, soneira_peebles_nd, domain_center,
+    power_law, fit_2pcf, fit_window, log_amplitude_ratio, dilution_from_a,
+    _random_in_territory, _align, MIN_PAIRS, FIT_RANGE,
 )
 
 SEED = 42
 
-# 2PCF parameters (shared by every comparison notebook)
-N_BINS = 18
-N_RANDOM = 5000
-N_RUNS_2PCF = 5
+# The 2PCF parameters are those of the calibration (cal.PCF_PARAMS,
+# cal.pcf_budget), the fit window those of sp_helpers (FIT_RANGE, MIN_PAIRS).
+N_BINS_MARKS = 18          # bins of the mark correlation function only
 
 
 # ===========================================================================
@@ -82,6 +93,9 @@ N_RUNS_2PCF = 5
 _FR = ROOT / "data" / "clean_transport_dataset" / "France"
 _FR_BORDER = _FR / "france_nat_earth.geojson"
 
+# largest_only=True: the domain is the largest polygon of the border file
+# (mainland). Needed for France, whose Natural Earth border holds the
+# overseas territories, and used for Germany, as in Table 1.
 DATASETS = {
     # The Austrian city data are not distributed with this repository (see the
     # README). The entry is kept so that the results can be reproduced locally.
@@ -110,7 +124,7 @@ DATASETS = {
         threshold_variable="population_density", threshold=1,
         N=4932, area_km2=538401,
         gamma_data=0.931, r0_data_m=12427, rmax=160_000,
-        eta=6, m_star=3661, R_ref_m=496_900,
+        eta=6, m_star=3661, R_ref_m=496_900, largest_only=True,
     ),
     "Gares France": dict(
         name="France", crs="EPSG:2154",
@@ -119,7 +133,7 @@ DATASETS = {
         threshold_variable="population_density", threshold=1,
         N=3470, area_km2=538401,
         gamma_data=0.643, r0_data_m=61622, rmax=160_000,
-        eta=6, m_star=2896, R_ref_m=496_900,
+        eta=6, m_star=2896, R_ref_m=496_900, largest_only=True,
     ),
     # Large datasets (N >> 10,000) are subsampled to N_data_cap points when
     # loaded: the O(N^2) cdist becomes impractical beyond that, and the
@@ -131,7 +145,7 @@ DATASETS = {
         threshold_variable="population_density", threshold=1,
         N=912_982, area_km2=538_401, N_data_cap=10_000,
         gamma_data=0.954, r0_data_m=7_995, rmax=160_000,
-        eta=6, m_star=235_268, R_ref_m=496_900,
+        eta=6, m_star=235_268, R_ref_m=496_900, largest_only=True,
     ),
     "France Communes": dict(
         name="France", crs="EPSG:2154",
@@ -140,7 +154,7 @@ DATASETS = {
         threshold_variable="population_density", threshold=1,
         N=34_269, area_km2=538_401, N_data_cap=10_000,
         gamma_data=0.254, r0_data_m=292, rmax=160_000,
-        eta=2, m_star=24_647, R_ref_m=496_900,
+        eta=2, m_star=24_647, R_ref_m=496_900, largest_only=True,
     ),
     "France Routes": dict(
         name="France", crs="EPSG:2154",
@@ -149,7 +163,7 @@ DATASETS = {
         threshold_variable="population_density", threshold=1,
         N=897_965, area_km2=538_401, N_data_cap=10_000,
         gamma_data=0.525, r0_data_m=1_744, rmax=160_000,
-        eta=7, m_star=625_121, R_ref_m=496_900,
+        eta=7, m_star=625_121, R_ref_m=496_900, largest_only=True,
     ),
     "Germany Stops": dict(
         name="Germany", crs="EPSG:4839",
@@ -158,7 +172,7 @@ DATASETS = {
         threshold_variable="population_density", threshold=1,
         N=660_298, area_km2=355_405, N_data_cap=10_000,
         gamma_data=0.612, r0_data_m=4_384, rmax=160_000,
-        eta=4, m_star=413_956, R_ref_m=364_100,
+        eta=4, m_star=413_956, R_ref_m=364_100, largest_only=True,
     ),
     "Swiss Stops": dict(
         name="Switzerland", crs="EPSG:21781",
@@ -221,68 +235,101 @@ def rejection_sample_in_boundary(n, geom_norm, rng, max_factor=8):
     return np.vstack(collected)[:n]
 
 
-def compute_2pcf_norm(xy, geom_norm, n_random=N_RANDOM, n_runs=N_RUNS_2PCF,
-                      n_bins=N_BINS):
-    """Landy-Szalay 2PCF in normalised coordinates, logarithmic bins.
+def denormalize_coords(xy_norm, bounds_metric):
+    """Inverse of normalize_coords, from [0, 1]^2 back to metric coordinates."""
+    xmin, ymin, xmax, ymax = bounds_metric
+    scale = max(xmax - xmin, ymax - ymin)
+    xy_norm = np.asarray(xy_norm, dtype=float)
+    return np.column_stack([xy_norm[:, 0] * scale + xmin,
+                            xy_norm[:, 1] * scale + ymin])
 
-    The random catalogue is drawn n_runs times (n_random points each) inside
-    the border and the DR and RR counts are averaged.
-    Returns (r_centers, xi) with xi = (DD - 2DR + RR) / RR.
+
+def compute_2pcf(xy_norm, ld, full=False, params=None, rmax=None):
+    """Landy-Szalay 2PCF of a normalised point set, with the calibration chain.
+
+    The points are mapped back to the metric CRS of the dataset and passed
+    to methods_two_point_correlation.PCF_with_variance with the parameters
+    of calibration.py (cal.PCF_PARAMS, lightened by cal.pcf_budget above
+    5,000 points): split random catalogues drawn inside ld["gdf_edge"],
+    20 logarithmic bins from the mean nearest-neighbour distance of the
+    point set to the rmax of the dataset, xi attached to the upper edge of
+    the bin, k realisations of the random catalogue. This is the single
+    2PCF chain of the paper since the discussion with Charles (the former
+    normalised chain compute_2pcf_norm, 18 bins to 0.55 dmax, is gone).
+
+    Parameters
+    ----------
+    xy_norm : array (n, 2) in [0, 1]^2 (frame of ld).
+    ld : dict of load_dataset (gdf_edge, bounds, crs, rmax).
+    full : bool. False returns (r, xi) with r in metres and xi the mean
+        over the k realisations. True returns a dict with r, xi, l_xi,
+        xi_std, dd (data pairs per bin), counts, N, and the power-law fit
+        of `fit_powerlaw` (gamma, r0_m, errors, fit_mask, fit_info).
+    params : dict like cal.PCF_PARAMS (default: cal.PCF_PARAMS).
+    rmax : float, metres (default: ld["rmax"]).
     """
-    DD_raw = cdist(xy, xy)
-    DD_raw = np.triu(DD_raw, k=1).ravel()
-    DD_raw = DD_raw[DD_raw > 0]
-
-    tree = cKDTree(xy)
-    nn_dist, _ = tree.query(xy, k=2)
-    rmin = max(np.mean(nn_dist[:, 1]) * 0.5, 1e-5)
-    rmax = np.max(DD_raw) * 0.55
-
-    r_edges = np.logspace(np.log10(rmin), np.log10(rmax), n_bins + 1)
-    r_centers = np.sqrt(r_edges[:-1] * r_edges[1:])
-    DD_hist, _ = np.histogram(DD_raw, bins=r_edges)
-    DD_norm = DD_hist / max(len(DD_raw), 1)
-
-    rng_r = np.random.default_rng(99)
-    DR_list, RR_list = [], []
-    for _ in range(n_runs):
-        rand_xy = rejection_sample_in_boundary(n_random, geom_norm, rng_r)
-        DR_raw = cdist(xy, rand_xy).ravel()
-        DR_hist, _ = np.histogram(DR_raw, bins=r_edges)
-        DR_list.append(DR_hist / max(len(DR_raw), 1))
-        RR_raw = cdist(rand_xy, rand_xy)
-        RR_raw = np.triu(RR_raw, k=1).ravel()
-        RR_raw = RR_raw[RR_raw > 0]
-        RR_hist, _ = np.histogram(RR_raw, bins=r_edges)
-        RR_list.append(RR_hist / max(len(RR_raw), 1))
-
-    DR_norm = np.mean(DR_list, axis=0)
-    RR_norm = np.mean(RR_list, axis=0)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        xi = np.where(RR_norm > 0,
-                      (DD_norm - 2 * DR_norm + RR_norm) / RR_norm, np.nan)
-    return r_centers, xi
+    p = cal.PCF_PARAMS if params is None else params
+    rmax = ld["rmax"] if rmax is None else rmax
+    xy_m = denormalize_coords(xy_norm, ld["bounds"])
+    gdf = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy(xy_m[:, 0], xy_m[:, 1]), crs=ld["crs"])
+    N_run, size, k = cal.pcf_budget(len(xy_m), p["N_run"], p["size"], p["k"])
+    r_edges, l_xi, counts = mtpc.PCF_with_variance(
+        gdf, ld["gdf_edge"], ld["crs"], N_run, size, k, rmax, p["scale"],
+        p["nbins"], return_counts=True)
+    n = min(len(r_edges), min(len(x) for x in l_xi))
+    l_xi = np.array([np.asarray(x, dtype=float)[:n] for x in l_xi])
+    r = np.asarray(r_edges, dtype=float)[:n]
+    xi = l_xi.mean(axis=0)
+    if not full:
+        return r, xi
+    pcf = dict(r=r, xi=xi, l_xi=l_xi, xi_std=l_xi.std(axis=0),
+               dd=np.asarray(counts["DD"])[:n], counts=counts, N=len(xy_m))
+    pcf.update(fit_powerlaw(pcf))
+    return pcf
 
 
-def fit_powerlaw_norm(r, xi, a=2, b=None):
-    """Fit xi(r) = (r / r0)^(-gamma) on bins a..b-1.
+def fit_powerlaw(pcf, min_pairs=MIN_PAIRS, fit_range=FIT_RANGE):
+    """Power-law fit xi(r) = (r / r0)^(-gamma) of a `compute_2pcf` dict.
 
-    Only finite positive xi are used. Returns (gamma, r0), or (None, None)
-    when fewer than 3 bins are usable or the fit fails.
+    Same convention as the calibration (sp_helpers.fit_2pcf): curve_fit
+    weighted by the spread of the k realisations, on the fit window of
+    sp_helpers.fit_window, i.e. the bins [fit_range) minus the small-r
+    bins holding fewer than min_pairs data pairs (pcf["dd"]).
+    Returns dict(gamma, r0_m, gamma_err, r0_err_m, fit_mask, fit_info);
+    gamma is None when the fit fails.
     """
-    if b is None:
-        b = len(r) - 2
-    valid = np.isfinite(xi[a:b]) & (xi[a:b] > 0) & (r[a:b] > 0)
-    if valid.sum() < 3:
-        return None, None
-    try:
-        popt, _ = curve_fit(
-            lambda r_, gamma, r0: (r_ / r0) ** (-gamma),
-            r[a:b][valid], xi[a:b][valid],
-            p0=[1.0, 0.01], bounds=([0.05, 1e-6], [1.95, 1.0]), maxfev=3000)
-        return popt[0], popt[1]
-    except Exception:
-        return None, None
+    g, r0, g_err, r0_err, (mask, info) = fit_2pcf(
+        pcf["r"], pcf["l_xi"], a=fit_range[0], b=fit_range[1],
+        dd=pcf.get("dd"), min_pairs=min_pairs, return_window=True)
+    return dict(gamma=g, r0_m=r0, gamma_err=g_err, r0_err_m=r0_err,
+                fit_mask=mask, fit_info=info)
+
+
+def fit_gamma(r, xi, dd=None, min_pairs=MIN_PAIRS, fit_range=FIT_RANGE):
+    """Power-law fit of one curve (r, xi), returns (gamma, r0 in metres).
+
+    Shortcut of `fit_powerlaw` for a single mean curve, e.g. the output of
+    compute_2pcf(..., full=False) or of metadata_marks.compute_2pcf_people.
+    Same fit window (bins fit_range minus the small-r bins with fewer than
+    min_pairs data pairs when dd is given); with a single curve the fit is
+    unweighted. gamma is None when the fit fails.
+    """
+    f = fit_powerlaw(dict(r=np.asarray(r, dtype=float),
+                          l_xi=np.atleast_2d(np.asarray(xi, dtype=float)),
+                          dd=dd), min_pairs=min_pairs, fit_range=fit_range)
+    return f["gamma"], f["r0_m"]
+
+
+def describe_fit_window(pcf):
+    """One-line description of the fit window of a `compute_2pcf` dict."""
+    w = pcf["fit_info"]
+    if w["first"] is None:
+        return "fit window: empty"
+    return (f"fit window: bins {w['first']}..{w['last']} "
+            f"({w['r_lo'] / 1e3:.2f}-{w['r_hi'] / 1e3:.1f} km), "
+            f"{len(w['dropped_min_pairs'])} small-r bin(s) dropped "
+            f"(DD < {w['min_pairs']})")
 
 
 def js_divergence(r_ref, xi_ref, r_mod, xi_mod):
@@ -325,47 +372,62 @@ def simulate_poisson(N_target, geom_norm, seed=None):
 # 4. Soneira-Peebles mixture (SP fractal + uniform background)
 # ===========================================================================
 
-def build_sp_mixture(ds, gdf_edge, bounds, geom_norm, r_data, xi_data,
-                     N_target, seed=SEED, verbose=False, return_labels=False):
+def build_sp_mixture(ds, ld, pcf_data, N_target, seed=SEED, verbose=False,
+                     return_labels=False, return_info=False, radial="uniform"):
     """Build a calibrated SP fractal plus a uniform background.
 
     Steps (see sp_helpers):
-      1. full SP with m_SP >= m* nodes inside the territory, where m* is
-         rescaled by N_target / N when N_target < N
-      2. n_rand uniform points are added so that the amplitude of the 2PCF
-         matches the data (rho = <xi_data / xi_SP>, n_rand = m_SP (rho^-1/2 - 1))
+      1. full SP with eta^L >= m* nodes, m* being rescaled by N_target / N
+         when N_target < N, drawn by the N-dimensional generator with
+         dim = 2 (child-by-child rejection at the border of ld["gdf_edge"])
+      2. the amplitude ratio a is estimated in log on the fit window of the
+         data 2PCF (log a = <log xi_data - log xi_SP>, both positive) and
+         n_rand = m_SP (a^-1/2 - 1) uniform points are added
       3. random deletion down to exactly N_target nodes
+
+    Parameters
+    ----------
+    ds : entry of DATASETS (eta, gamma_data, R_ref_m, m_star, N).
+    ld : dict of load_dataset.
+    pcf_data : dict of compute_2pcf(..., full=True) of the data at the N of
+        the comparison (ld["pcf_data"] or the one of data_2pcf_at_N); its
+        fit_mask is the window of log a.
+    N_target : int.
+    seed : int, seeds the SP draw and the background.
+    radial : "uniform" (SP definition) or "linear" (historical 2D code).
 
     Returns xy_norm (coordinates in [0, 1]^2). With return_labels=True,
     returns (xy_norm, is_sp) where is_sp[i] tells whether node i comes from
-    the SP fractal (True) or from the background (False). The random stream
-    is the same in both cases.
+    the SP fractal. With return_info=True a dict (a, log_a, n_rand, m_sp,
+    L, lamb, n_bins) is appended.
     """
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     m_star_eff = ds["m_star"]
     if N_target < ds["N"]:
         m_star_eff = max(1, round(ds["m_star"] / ds["N"] * N_target))
 
     pos_sp, L_sp, lamb_sp = build_sp_model(
-        m_star_eff, ds["eta"], ds["gamma_data"], ds["R_ref_m"], gdf_edge, ds["crs"])
+        m_star_eff, ds["eta"], ds["gamma_data"], ds["R_ref_m"], ld["gdf_edge"],
+        dim=2, rng=rng, radial=radial, verbose=verbose)
     m_sp = len(pos_sp)
-    if verbose:
-        print(f"  SP: eta={ds['eta']} L={L_sp} lambda={lamb_sp:.3f} m_SP={m_sp:,}")
 
-    sp_norm, _ = normalize_coords(pos_sp, bounds)
-    r_tmp, xi_tmp = compute_2pcf_norm(sp_norm, geom_norm, N_RANDOM, 3, N_BINS)
-    xi_data_al = np.interp(
-        np.log10(np.clip(r_tmp, 1e-9, None)),
-        np.log10(np.clip(r_data, 1e-9, None)),
-        np.nan_to_num(xi_data), left=0.0, right=0.0)
-    mask = np.isfinite(xi_tmp) & (xi_tmp > 1e-6) & np.isfinite(xi_data_al)
-    rho = np.clip(np.mean(xi_data_al[mask] / xi_tmp[mask]) if mask.sum() else 1.0,
-                  1e-4, 1.0)
-    n_rand = int(np.round(m_sp * (1.0 / np.sqrt(rho) - 1.0)))
+    sp_norm, _ = normalize_coords(pos_sp, ld["bounds"])
+    r_sp, xi_sp = compute_2pcf(sp_norm, ld)
+    xi_sp_al = _align(r_sp, np.nan_to_num(xi_sp), pcf_data["r"])
+    mask = pcf_data.get("fit_mask")
+    if mask is None:
+        mask, _ = fit_window(pcf_data["r"], pcf_data["xi"], dd=pcf_data.get("dd"))
+    a, log_a, n_used = log_amplitude_ratio(pcf_data["xi"], xi_sp_al, mask)
+    if n_used == 0:
+        a, log_a = 1.0, 0.0
+    n_rand = dilution_from_a(a, m_sp)
+    if verbose:
+        print(f"  SP: eta={ds['eta']} L={L_sp} lambda={lamb_sp:.3f} m_SP={m_sp:,}"
+              f"  a={a:.3f} (log a={log_a:.2f}, {n_used} bins) n_rand={n_rand:,}")
 
     rng_f = np.random.default_rng(seed + 1)
-    terr_g = gdf_edge.geometry.union_all()
-    rand_xy = _random_in_territory(n_rand, rng_f, gdf_edge, ds["crs"],
+    terr_g = ld["gdf_edge"].geometry.union_all()
+    rand_xy = _random_in_territory(n_rand, rng_f, ld["gdf_edge"], ld["crs"],
                                    terr_g, terr_g.bounds)
     pos_mix = np.vstack([pos_sp, rand_xy])
     is_sp = np.zeros(len(pos_mix), dtype=bool)
@@ -373,32 +435,39 @@ def build_sp_mixture(ds, gdf_edge, bounds, geom_norm, r_data, xi_data,
     if len(pos_mix) > N_target:
         keep = rng_f.choice(len(pos_mix), size=N_target, replace=False)
         pos_mix, is_sp = pos_mix[keep], is_sp[keep]
-    xy_norm, _ = normalize_coords(pos_mix, bounds)
+    xy_norm, _ = normalize_coords(pos_mix, ld["bounds"])
+    out = (xy_norm,)
     if return_labels:
-        return xy_norm, is_sp
-    return xy_norm
+        out += (is_sp,)
+    if return_info:
+        out += (dict(a=a, log_a=log_a, n_rand=n_rand, m_sp=m_sp, L=L_sp,
+                     lamb=lamb_sp, n_bins=n_used),)
+    return out[0] if len(out) == 1 else out
 
 
 # ===========================================================================
 # 5. Dataset loading
 # ===========================================================================
 
-def load_dataset(ds, compute_data_2pcf=True, verbose=True):
+def load_dataset(ds, compute_data_2pcf=True, verbose=True, largest_only=True):
     """Load the border and the points, normalise them, compute the data 2PCF.
 
     Large datasets are subsampled to ds["N_data_cap"] points (seed 42). The
     function also stores in `ds` the normalised correlation length r0_norm and
     the offspring spread sigma = r0_norm / 2 used by the marked Hawkes process.
 
-    Returns a dict `ld` shared by all the model builders.
+    largest_only=True keeps the mainland only (largest polygon): the BSTPP
+    models of notebook 09 are fitted on that single polygon, in the
+    normalised frame defined by its bounds, so the comparison framework
+    keeps it for every model. The calibration (calibration.py) uses the
+    full multipolygon.
+
+    Returns a dict `ld` shared by all the model builders, with the data
+    2PCF as a `compute_2pcf` dict in ld["pcf_data"] (r_data, xi_data,
+    gamma_fit, r0_fit_m duplicate its main entries).
     """
     crs = ds["crs"]
-    gdf_edge_raw = gpd.read_file(ds["path_border"])
-    geom0 = gdf_edge_raw.geometry.iloc[0]
-    if isinstance(geom0, MultiPolygon):
-        largest = max(geom0.geoms, key=lambda p: p.area)
-        gdf_edge_raw = gpd.GeoDataFrame(geometry=[largest], crs=gdf_edge_raw.crs)
-    gdf_edge = gdf_edge_raw.to_crs(crs)
+    gdf_edge, _ = cal.load_territory(ds, largest_only=largest_only)
 
     gdf_pts = mtpc.load_df_to_gdf(ds["path_csv"], ds["threshold"],
                                   ds["threshold_variable"])
@@ -433,20 +502,23 @@ def load_dataset(ds, compute_data_2pcf=True, verbose=True):
     if verbose:
         print(f"  N={N_real:,}  scale={scale_m / 1e3:.1f} km")
 
-    r_data = xi_data = gamma_fit = r0_fit = None
-    if compute_data_2pcf:
-        r_data, xi_data = compute_2pcf_norm(xy_norm, geom_norm)
-        gamma_fit, r0_fit = fit_powerlaw_norm(r_data, xi_data)
-        if verbose and gamma_fit is not None:
-            print(f"  gamma_data={gamma_fit:.3f}  r0_norm={r0_fit:.5f}")
-
-    return dict(
-        gdf_edge=gdf_edge, xy_metric=xy_metric, xy_norm=xy_norm,
-        pop_data=pop_data,
+    ld = dict(
+        gdf_edge=gdf_edge, crs=crs, rmax=ds["rmax"],
+        xy_metric=xy_metric, xy_norm=xy_norm, pop_data=pop_data,
         N_real=N_real, N_full=N_full, scale_m=scale_m, bounds=bounds,
         geom_norm=geom_norm,
-        r_data=r_data, xi_data=xi_data, gamma_fit=gamma_fit, r0_fit_norm=r0_fit,
+        pcf_data=None, r_data=None, xi_data=None, gamma_fit=None,
+        r0_fit_m=None,
     )
+    if compute_data_2pcf:
+        pcf = compute_2pcf(xy_norm, ld, full=True)
+        ld.update(pcf_data=pcf, r_data=pcf["r"], xi_data=pcf["xi"],
+                  gamma_fit=pcf["gamma"], r0_fit_m=pcf["r0_m"])
+        if verbose:
+            print("  " + describe_fit_window(pcf))
+            if pcf["gamma"] is not None:
+                print(f"  gamma_data={pcf['gamma']:.3f}  r0={pcf['r0_m'] / 1e3:.1f} km")
+    return ld
 
 
 def data_2pcf_at_N(ld, N_target, seed=SEED):
@@ -454,15 +526,15 @@ def data_2pcf_at_N(ld, N_target, seed=SEED):
 
     Used to compare data and models at the same N. When N_target >= N_real,
     the full data and their precomputed 2PCF are returned.
-    Returns (xy, r, xi).
+    Returns (xy, pcf) with pcf the `compute_2pcf` dict (r, xi, dd, gamma,
+    fit_mask, ...).
     """
     if N_target >= ld["N_real"]:
-        return ld["xy_norm"], ld["r_data"], ld["xi_data"]
+        return ld["xy_norm"], ld["pcf_data"]
     rng = np.random.default_rng(seed)
     idx = rng.choice(ld["N_real"], size=N_target, replace=False)
     xy = ld["xy_norm"][idx]
-    r, xi = compute_2pcf_norm(xy, ld["geom_norm"])
-    return xy, r, xi
+    return xy, compute_2pcf(xy, ld, full=True)
 
 
 # ===========================================================================
@@ -588,15 +660,15 @@ def stochastic_bands(ds, ld, N, n_instances=10, seed=SEED, bstpp_models=None,
     Returns {model: dict(r, xi_mean, xi_std, jsd_mean, jsd_std, cv)}.
     """
     bstpp_models = bstpp_models or {}
-    geom_norm, gdf_edge, bounds = ld["geom_norm"], ld["gdf_edge"], ld["bounds"]
-    data_xy, r_data, xi_data = data_2pcf_at_N(ld, N, seed=seed)
+    geom_norm = ld["geom_norm"]
+    data_xy, pcf_data = data_2pcf_at_N(ld, N, seed=seed)
+    r_data, xi_data = pcf_data["r"], pcf_data["xi"]
     out = {}
     for m in models:
         r_ref, xi_list, jsd_list = None, [], []
         for k in range(n_instances):
             if m == "SP":
-                xy = build_sp_mixture(ds, gdf_edge, bounds, geom_norm,
-                                      r_data, xi_data, N, seed=seed + 1000 + k)
+                xy = build_sp_mixture(ds, ld, pcf_data, N, seed=seed + 1000 + k)
             elif m == "Poisson":
                 xy = simulate_poisson(N, geom_norm, seed=seed + 1000 + k)
             elif bstpp_models.get(m) is not None:
@@ -606,7 +678,7 @@ def stochastic_bands(ds, ld, N, n_instances=10, seed=SEED, bstpp_models=None,
                 xy = None
             if xy is None or len(xy) < 10:
                 continue
-            r_k, xi_k = compute_2pcf_norm(xy, geom_norm)
+            r_k, xi_k = compute_2pcf(xy, ld)
             if r_ref is None:
                 r_ref = r_k
             xi_list.append(_align_xi(r_k, xi_k, r_ref))
@@ -642,12 +714,13 @@ def compare_at_constant_N(ds, ld, N_target=None, models=("SP", "Poisson",
     and Cox Hawkes are resampled from their BSTPP pools ({name: pool_xy}).
     A model without a pool gets a NaN JSD.
 
-    Returns {model: dict(xy, r, xi, gamma, jsd, n)} plus the key "data".
+    Returns {model: dict(xy, r, xi, gamma, jsd, n, pcf)} plus the key
+    "data"; pcf is the `compute_2pcf` dict (fit window, pair counts).
     """
     if N_target is None:
         N_target = ld["N_real"]
     N_target = min(N_target, ld["N_real"], N_CAP_MODELS)
-    geom_norm, gdf_edge, bounds = ld["geom_norm"], ld["gdf_edge"], ld["bounds"]
+    geom_norm = ld["geom_norm"]
     bstpp_pools = bstpp_pools or {}
 
     def _from_pool(pool):
@@ -655,26 +728,28 @@ def compare_at_constant_N(ds, ld, N_target=None, models=("SP", "Poisson",
         idx = rng.choice(len(pool), size=N_target, replace=len(pool) < N_target)
         return pool[idx]
 
-    data_xy, r_data, xi_data = data_2pcf_at_N(ld, N_target, seed=seed)
-    out = {"data": dict(xy=data_xy, r=r_data, xi=xi_data, n=len(data_xy))}
+    data_xy, pcf_data = data_2pcf_at_N(ld, N_target, seed=seed)
+    r_data, xi_data = pcf_data["r"], pcf_data["xi"]
+    out = {"data": dict(xy=data_xy, r=r_data, xi=xi_data, n=len(data_xy),
+                        gamma=pcf_data["gamma"], pcf=pcf_data)}
     for m in models:
         pool = bstpp_pools.get(m)
         if m == "SP":
-            xy = build_sp_mixture(ds, gdf_edge, bounds, geom_norm,
-                                  r_data, xi_data, N_target, seed=seed)
+            xy = build_sp_mixture(ds, ld, pcf_data, N_target, seed=seed)
         elif m == "Poisson":
             xy = simulate_poisson(N_target, geom_norm, seed=seed)
         elif pool is not None and len(pool) >= 10:
             xy = _from_pool(pool)
         else:
             out[m] = dict(xy=np.zeros((0, 2)), r=None, xi=None,
-                          gamma=np.nan, jsd=np.nan, n=0)
+                          gamma=np.nan, jsd=np.nan, n=0, pcf=None)
             continue
-        r_m, xi_m = compute_2pcf_norm(xy, geom_norm)
-        g_m, _ = fit_powerlaw_norm(r_m, xi_m)
+        pcf_m = compute_2pcf(xy, ld, full=True)
+        r_m, xi_m = pcf_m["r"], pcf_m["xi"]
         jsd = (js_divergence(r_data, xi_data, r_m, xi_m)
                if r_data is not None else np.nan)
-        out[m] = dict(xy=xy, r=r_m, xi=xi_m, gamma=g_m, jsd=jsd, n=len(xy))
+        out[m] = dict(xy=xy, r=r_m, xi=xi_m, gamma=pcf_m["gamma"], jsd=jsd,
+                      n=len(xy), pcf=pcf_m)
     return out
 
 
@@ -704,29 +779,6 @@ def sweep_constant_N(ds, ld, n_list, models=("SP", "Poisson", "LGCP",
 # that decreases with the level then gives a power-law rank-size
 # distribution, and the marks are correlated with the spatial structure.
 
-def soneira_peebles_tree(lamb, eta, L, R, center, seed=None):
-    """Generate the full SP tree (all levels 0..L-1) with the level of each node.
-
-    Contrary to soneira_peebles_border, which keeps only the leaves, the
-    nodes of every level are kept. Level 0 holds the eta children of the root.
-    Returns (positions (n, 2), levels (n,)).
-    """
-    rng = np.random.default_rng(seed)
-    position = np.asarray(center, dtype=float).reshape(1, 2)
-    all_pos, all_lvl = [], []
-    for i in range(L):
-        child = []
-        for x, y in position:
-            r = (R / (lamb ** i)) * rng.uniform(0, 1, size=eta)
-            theta = rng.uniform(0, 2 * np.pi, size=eta)
-            child.extend(np.column_stack([x - r * np.cos(theta),
-                                          y - r * np.sin(theta)]))
-        position = np.array(child)
-        all_pos.append(position)
-        all_lvl.append(np.full(len(position), i))
-    return np.vstack(all_pos), np.concatenate(all_lvl)
-
-
 def population_from_level(levels, eta, pop_max=1e6, slope=1.0):
     """Population pop_max / eta^(slope * level)."""
     return pop_max / (eta ** (slope * levels.astype(float)))
@@ -742,9 +794,8 @@ def build_sp_with_population(ds, gdf_edge, L=None, pop_max=1e6, slope=1.0,
     the territory are kept, then subsampled to max_nodes if needed.
     Returns dict(xy_norm, pop, levels).
     """
-    crs = ds["crs"]
     eta, gamma = ds["eta"], ds["gamma_data"]
-    lamb = eta ** (1.0 / (2.0 - gamma))
+    lamb = lambda_of_gamma(eta, gamma, 2)
     if L is None:
         L = max(int(np.ceil(np.log(max(ds["m_star"], eta)) / np.log(eta))), 4)
     # Largest L such that sum_{i=1}^{L} eta^i <= max_nodes
@@ -753,16 +804,15 @@ def build_sp_with_population(ds, gdf_edge, L=None, pop_max=1e6, slope=1.0,
         L_cap += 1
         cum += eta ** L_cap
     L = L_cap
-    center = gdf_edge.centroid.get_coordinates().to_numpy()[0]
 
-    pos, lvl = soneira_peebles_tree(lamb, eta, L, ds["R_ref_m"], center, seed)
+    # Same generator as build_sp_model (dim = 2, child-by-child rejection at
+    # the border), keeping the nodes of every level with their level index.
+    _, levels = soneira_peebles_nd(
+        eta, lamb, L, ds["R_ref_m"], domain_center(gdf_edge), domain=gdf_edge,
+        rng=np.random.default_rng(seed), return_levels=True)
+    pos = np.vstack([lv[0] for lv in levels])
+    lvl = np.concatenate([np.full(len(lv[0]), i) for i, lv in enumerate(levels)])
     pop = population_from_level(lvl, eta, pop_max, slope)
-
-    s = gpd.GeoDataFrame(geometry=gpd.points_from_xy(pos[:, 0], pos[:, 1]),
-                         crs=crs)
-    inside = gpd.sjoin(s, gdf_edge, how="left",
-                       predicate="within")["index_right"].notna().to_numpy()
-    pos, pop, lvl = pos[inside], pop[inside], lvl[inside]
 
     if len(pos) > max_nodes:
         rng = np.random.default_rng(seed)
@@ -867,29 +917,31 @@ def _cap_pts(xy, max_pts, seed=SEED):
     return xy[rng.choice(len(xy), size=max_pts, replace=False)]
 
 
-def marked_clustering_2pcf(xy, pop, geom_norm, frac_high=0.2, min_pts=20,
+def marked_clustering_2pcf(xy, pop, ld, frac_high=0.2, min_pts=20,
                            max_pts=6000):
     """2PCF of the high-population nodes versus the low-population nodes.
 
     If the mark is correlated with the structure, high-population nodes are
     more clustered (gamma_hi > gamma_lo). Gammas are NaN when a group has
-    fewer than min_pts nodes. Each group is capped at max_pts nodes.
-    Returns dict(r_hi, xi_hi, r_lo, xi_lo, gamma_hi, gamma_lo).
+    fewer than min_pts nodes. Each group is capped at max_pts nodes. The
+    2PCFs come from `compute_2pcf` (fit with the minimum-pairs window).
+    Returns dict(r_hi, xi_hi, r_lo, xi_lo, gamma_hi, gamma_lo, pcf_hi,
+    pcf_lo).
     """
     xy_hi, xy_lo = split_by_population(xy, pop, frac_high)
     if len(xy_hi) < min_pts or len(xy_lo) < min_pts:
         return dict(r_hi=None, xi_hi=None, r_lo=None, xi_lo=None,
-                    gamma_hi=np.nan, gamma_lo=np.nan)
+                    gamma_hi=np.nan, gamma_lo=np.nan, pcf_hi=None, pcf_lo=None)
     xy_hi, xy_lo = _cap_pts(xy_hi, max_pts), _cap_pts(xy_lo, max_pts)
-    r_hi, xi_hi = compute_2pcf_norm(xy_hi, geom_norm)
-    r_lo, xi_lo = compute_2pcf_norm(xy_lo, geom_norm)
-    g_hi, _ = fit_powerlaw_norm(r_hi, xi_hi)
-    g_lo, _ = fit_powerlaw_norm(r_lo, xi_lo)
-    return dict(r_hi=r_hi, xi_hi=xi_hi, r_lo=r_lo, xi_lo=xi_lo,
-                gamma_hi=g_hi, gamma_lo=g_lo)
+    pcf_hi = compute_2pcf(xy_hi, ld, full=True)
+    pcf_lo = compute_2pcf(xy_lo, ld, full=True)
+    nan = lambda g: np.nan if g is None else g
+    return dict(r_hi=pcf_hi["r"], xi_hi=pcf_hi["xi"], r_lo=pcf_lo["r"],
+                xi_lo=pcf_lo["xi"], gamma_hi=nan(pcf_hi["gamma"]),
+                gamma_lo=nan(pcf_lo["gamma"]), pcf_hi=pcf_hi, pcf_lo=pcf_lo)
 
 
-def mark_correlation_function(xy, marks, geom_norm=None, n_bins=18,
+def mark_correlation_function(xy, marks, geom_norm=None, n_bins=N_BINS_MARKS,
                               max_pts=6000, seed=SEED):
     """Mark correlation function k_mm(r) (Stoyan).
 

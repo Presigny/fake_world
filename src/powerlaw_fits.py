@@ -16,10 +16,18 @@ The pair counts are computed with cKDTree, with the binning convention of
 methods_two_point_correlation (np.digitize(right=True)) and the split random
 catalogues of Keihanen et al. (2019).
 """
+from pathlib import Path
+import sys
+import warnings
+
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.optimize import curve_fit, minimize
-import warnings
+
+_SRC = Path(__file__).resolve().parent
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+from sp_helpers import fit_window, MIN_PAIRS, FIT_RANGE   # noqa: E402
 
 # --------------------------------------------------------------------------
 # Pair counts, same binning convention as methods_two_point_correlation
@@ -103,36 +111,55 @@ def calib_counts(xy, gdf_edge, rmax, rng, nbins=20, N_run=5, size=7000, k=3,
 
 # --------------------------------------------------------------------------
 # Fits. Bins 1..18 (FIT_RANGE = (1, 19)), position = upper edge, as in
-# sp_helpers.fit_2pcf.
+# sp_helpers.fit_2pcf, minus the small-r bins holding fewer than MIN_PAIRS
+# data pairs (sp_helpers.fit_window): pass the DD counts as `dd` to apply
+# the criterion (dd=None keeps the plain index range).
 # --------------------------------------------------------------------------
-A, B = 1, 19
+A, B = FIT_RANGE
 
 
 def pl(r, g, r0):
     return (r / r0) ** (-g)
 
 
-def fit_wls(edges, xis):
+def window(edges, xi, dd=None, min_pairs=MIN_PAIRS):
+    """Boolean mask of the fit bins (sp_helpers.fit_window), cut to the
+    common length of edges and xi."""
+    n = min(len(edges), len(xi))
+    mask, _ = fit_window(edges[:n], xi[:n], dd=dd, a=A, b=B, min_pairs=min_pairs)
+    return mask, n
+
+
+def dd_of(reps):
+    """Data pair counts DD of a list of counts_one dicts (mean over the
+    repetitions, which share the data in the same_data case)."""
+    return np.mean([c["DD"] for c in reps], axis=0)
+
+
+def fit_wls(edges, xis, dd=None, min_pairs=MIN_PAIRS):
     """Paper method: curve_fit on the mean xi, sigma = std over repetitions."""
     xi = np.mean(xis, axis=0); er = np.std(xis, axis=0)
-    r = edges[A:B]; y = xi[A:B]; s = er[A:B]
-    ok = np.isfinite(y)
-    s = np.maximum(s[ok], 0.01 * np.mean(np.abs(y[ok])) + 1e-9)
+    ok, n = window(edges, xi, dd, min_pairs)
+    r = edges[:n][ok]; y = xi[:n][ok]; s = er[:n][ok]
+    if ok.sum() < 3:
+        return np.nan, np.nan, np.nan
+    s = np.maximum(s, 0.01 * np.mean(np.abs(y)) + 1e-9)
     try:
-        p, cov = curve_fit(pl, r[ok], y[ok], p0=[1.0, np.median(r)], sigma=s,
+        p, cov = curve_fit(pl, r, y, p0=[1.0, np.median(r)], sigma=s,
                            absolute_sigma=False, maxfev=20000)
         return p[0], np.sqrt(cov[0, 0]), p[1]
     except Exception:
         return np.nan, np.nan, np.nan
 
 
-def fit_ols_log(edges, xis):
+def fit_ols_log(edges, xis, dd=None, min_pairs=MIN_PAIRS):
     xi = np.mean(xis, axis=0)
-    r = edges[A:B]; y = xi[A:B]
-    ok = np.isfinite(y) & (y > 0)
+    ok, n = window(edges, xi, dd, min_pairs)
+    ok &= xi[:n] > 0
+    r = edges[:n][ok]; y = xi[:n][ok]
     if ok.sum() < 3:
         return np.nan, np.nan, np.nan
-    sl, ic = np.polyfit(np.log(r[ok]), np.log(y[ok]), 1)
+    sl, ic = np.polyfit(np.log(r), np.log(y), 1)
     return -sl, np.nan, np.exp(ic / -sl)
 
 
@@ -141,7 +168,7 @@ def _bin_mean_powerlaw(lo, hi, g):
     return 2.0 / (2.0 - g) * (hi ** (2 - g) - lo ** (2 - g)) / (hi ** 2 - lo ** 2)
 
 
-def fit_poisson_mle(edges, reps, same_data):
+def fit_poisson_mle(edges, reps, same_data, min_pairs=MIN_PAIRS):
     """Maximum likelihood on the data pair counts.
 
     In bin i, DD_i ~ Poisson(mu_i), mu_i = P_i * Npairs * (1 + xi_i), where
@@ -151,17 +178,25 @@ def fit_poisson_mle(edges, reps, same_data):
     once and P_i is the mean of the random catalogues. The pairs are not
     independent, so the Fisher error is a lower bound.
     """
-    lo, hi = edges[A - 1:B - 1], edges[A:B]
+    # Same window as fit_wls: bins [A, B) from the first bin with at least
+    # min_pairs data pairs (the window is contiguous, so lo/hi are slices).
+    xi_m = np.mean([ls_xi(c) for c in reps], axis=0)
+    ok, n = window(edges, xi_m, dd_of(reps), min_pairs)
+    used = np.where(ok)[0]
+    if len(used) < 3:
+        return np.nan, np.nan, np.nan
+    a, b = int(used[0]), int(used[-1]) + 1
+    lo, hi = edges[a - 1:b - 1], edges[a:b]
     blocks = []
     if same_data:
         c0 = reps[0]
-        P = np.mean([c["RR"][A:B] / (c["N_run"] * c["Nrp"] * (c["Nrp"] - 1) / 2)
+        P = np.mean([c["RR"][a:b] / (c["N_run"] * c["Nrp"] * (c["Nrp"] - 1) / 2)
                      for c in reps], axis=0)
-        blocks.append((c0["DD"][A:B], P, c0["Nd"] * (c0["Nd"] - 1) / 2))
+        blocks.append((c0["DD"][a:b], P, c0["Nd"] * (c0["Nd"] - 1) / 2))
     else:
         for c in reps:
-            P = c["RR"][A:B] / (c["N_run"] * c["Nrp"] * (c["Nrp"] - 1) / 2)
-            blocks.append((c["DD"][A:B], P, c["Nd"] * (c["Nd"] - 1) / 2))
+            P = c["RR"][a:b] / (c["N_run"] * c["Nrp"] * (c["Nrp"] - 1) / 2)
+            blocks.append((c["DD"][a:b], P, c["Nd"] * (c["Nd"] - 1) / 2))
 
     def nll(th):
         g, lr0 = th
@@ -175,7 +210,7 @@ def fit_poisson_mle(edges, reps, same_data):
             out += np.sum(mu[ok] - DD[ok] * np.log(mu[ok]))
         return out
 
-    g0, _, r00 = fit_wls(edges, [ls_xi(c) for c in reps])
+    g0, _, r00 = fit_wls(edges, [ls_xi(c) for c in reps], dd_of(reps), min_pairs)
     if not np.isfinite(g0):
         g0, r00 = 0.8, np.median(hi)
     best = None

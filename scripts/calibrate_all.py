@@ -71,7 +71,7 @@ def main():
         df = df[cols]
         df.to_csv(OUT, index=False)
         print(f"written: {OUT.relative_to(ROOT)}")
-        print(df[["name", "N", "gamma", "eta", "m_star", "lamb", "L", "rho"]]
+        print(df[["name", "N", "gamma", "bins_dropped_min_pairs", "eta", "m_star", "lamb", "L", "a"]]
               .to_string(index=False))
 
 

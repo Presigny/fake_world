@@ -1,6 +1,7 @@
 __pycache__/
 .ipynb_checkpoints/
 out/*_cache/
+out/*_cache_cp/
 
 # Local data, never committed (see the README for where to get them).
 # Raw Austrian data must not be distributed with this branch (results are kept).

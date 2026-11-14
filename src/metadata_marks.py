@@ -148,14 +148,15 @@ def calibrate_beta_on_zipf(rho, target_zipf, pop_total,
     return best[0], best[2]
 
 
-def delta_gamma(xy, pop, geom_norm, frac_high=0.2):
+def delta_gamma(xy, pop, ld, frac_high=0.2):
     """Coupling between marks and structure, Delta gamma = gamma_hi - gamma_lo.
 
-    Wraps synthesis_utils.marked_clustering_2pcf (split by rank). A positive
-    value means that high-population nodes are more clustered than the
-    others, as in the real data. Returns (full result dict, Delta gamma).
+    Wraps synthesis_utils.marked_clustering_2pcf (split by rank, 2PCF and
+    fit of the calibration chain). A positive value means that
+    high-population nodes are more clustered than the others, as in the
+    real data. Returns (full result dict, Delta gamma).
     """
-    res = su.marked_clustering_2pcf(xy, pop, geom_norm, frac_high=frac_high)
+    res = su.marked_clustering_2pcf(xy, pop, ld, frac_high=frac_high)
     g_hi, g_lo = res["gamma_hi"], res["gamma_lo"]
     dg = (g_hi - g_lo) if (np.isfinite(g_hi) and np.isfinite(g_lo)) else np.nan
     return res, dg
@@ -321,8 +322,7 @@ def superpose_people(xy, pop, n_total=6000, jitter=0.0, seed=0):
     return out
 
 
-def compute_2pcf_people(xy, pop, geom_norm, n_random=su.N_RANDOM,
-                        n_runs=su.N_RUNS_2PCF, n_bins=su.N_BINS):
+def compute_2pcf_people(xy, pop, ld, full=False, params=None):
     """People 2PCF, a Landy-Szalay estimator weighted by the marks.
 
     In expectation, it is the 2PCF of the cloud where each point is replaced
@@ -336,48 +336,64 @@ def compute_2pcf_people(xy, pop, geom_norm, n_random=su.N_RANDOM,
         xi_people(r) = (DD_w - 2 DR_w + RR) / RR
 
     with w_i = pop_i / <pop>. Pairs of clones of the same point (d = 0) are
-    excluded, as in the standard estimator. Returns (r_centers, xi).
+    excluded, as in the standard estimator.
+
+    Grid and conventions of the calibration chain (synthesis_utils.
+    compute_2pcf): metres, 20 logarithmic bins from the mean
+    nearest-neighbour distance to ld["rmax"], index i holds
+    edges[i-1] < d <= edges[i] (np.digitize(right=True)), xi attached to
+    the upper edge, random catalogue of N_run x size points drawn in
+    ld["gdf_edge"] (cal.PCF_PARAMS, lightened by cal.pcf_budget).
+
+    Returns (r_edges, xi). With full=True, a dict like compute_2pcf (r, xi,
+    l_xi, dd = unweighted number of node pairs per bin, used by the
+    minimum-pairs criterion of the fit, gamma, r0_m, fit_mask, fit_info).
     """
-    xy = np.asarray(xy, dtype=float)
+    import calibration as cal
+    import methods_two_point_correlation as mtpc
+    p = cal.PCF_PARAMS if params is None else params
+    xy_m = su.denormalize_coords(xy, ld["bounds"])
     w = np.asarray(pop, dtype=float)
     w = w / w.mean()
+    n = len(xy_m)
+    N_run, size, _ = cal.pcf_budget(n, p["N_run"], p["size"], p["k"])
+    nbins = p["nbins"]
 
-    iu = np.triu_indices(len(xy), k=1)
-    d_pairs = cdist(xy, xy)[iu]
+    iu = np.triu_indices(n, k=1)
+    d_pairs = cdist(xy_m, xy_m)[iu]
     w_pairs = w[iu[0]] * w[iu[1]]
     pos = d_pairs > 0
     d_pairs, w_pairs = d_pairs[pos], w_pairs[pos]
 
-    # Same radial grid as compute_2pcf_norm (rmin = half the mean NN distance)
-    nn_dist, _ = cKDTree(xy).query(xy, k=2)
-    rmin = max(np.mean(nn_dist[:, 1]) * 0.5, 1e-5)
-    rmax = np.max(d_pairs) * 0.55
-    r_edges = np.logspace(np.log10(rmin), np.log10(rmax), n_bins + 1)
-    r_centers = np.sqrt(r_edges[:-1] * r_edges[1:])
+    nn_dist, _ = cKDTree(xy_m).query(xy_m, k=2)
+    rmin = max(np.mean(nn_dist[:, 1]), 1e-9)
+    r_edges = np.logspace(np.log10(rmin), np.log10(ld["rmax"]), nbins)
 
-    DD_hist, _ = np.histogram(d_pairs, bins=r_edges, weights=w_pairs)
-    DD_norm = DD_hist / max(w_pairs.sum(), 1e-12)
+    def _hist(d, weights=None):
+        idx = np.digitize(d, r_edges, right=True)
+        return np.bincount(idx, weights=weights, minlength=nbins + 1)[:nbins]
 
-    rng_r = np.random.default_rng(99)
+    DD_w = _hist(d_pairs, w_pairs) / max(w_pairs.sum(), 1e-12)
+    DD_n = _hist(d_pairs)                       # unweighted node pairs
     DR_list, RR_list = [], []
-    for _ in range(n_runs):
-        rand_xy = su.rejection_sample_in_boundary(n_random, geom_norm, rng_r)
-        dr = cdist(xy, rand_xy)
+    for _ in range(N_run):
+        rand_xy = mtpc.generate_random_point(ld["gdf_edge"], size, ld["crs"])
+        dr = cdist(xy_m, rand_xy)
         w_dr = np.repeat(w, dr.shape[1])
-        DR_hist, _ = np.histogram(dr.ravel(), bins=r_edges, weights=w_dr)
-        DR_list.append(DR_hist / max(w.sum() * len(rand_xy), 1e-12))
-        rr = cdist(rand_xy, rand_xy)
-        rr = np.triu(rr, k=1).ravel()
+        DR_list.append(_hist(dr.ravel(), w_dr) / max(w.sum() * len(rand_xy), 1e-12))
+        rr = cdist(rand_xy, rand_xy)[np.triu_indices(len(rand_xy), k=1)]
         rr = rr[rr > 0]
-        RR_hist, _ = np.histogram(rr, bins=r_edges)
-        RR_list.append(RR_hist / max(len(rr), 1))
-
-    DR_norm = np.mean(DR_list, axis=0)
-    RR_norm = np.mean(RR_list, axis=0)
+        RR_list.append(_hist(rr) / max(len(rr), 1))
+    DR_w = np.mean(DR_list, axis=0)
+    RR = np.mean(RR_list, axis=0)
     with np.errstate(divide="ignore", invalid="ignore"):
-        xi = np.where(RR_norm > 0,
-                      (DD_norm - 2 * DR_norm + RR_norm) / RR_norm, np.nan)
-    return r_centers, xi
+        xi = np.where(RR > 0, (DD_w - 2 * DR_w + RR) / RR, np.nan)
+    if not full:
+        return r_edges, xi
+    pcf = dict(r=r_edges, xi=xi, l_xi=np.array([xi]), xi_std=np.zeros(nbins),
+               dd=DD_n, N=n)
+    pcf.update(su.fit_powerlaw(pcf))
+    return pcf
 
 
 if __name__ == "__main__":
@@ -404,6 +420,6 @@ if __name__ == "__main__":
     print(f"M_norm peak = {M_norm[i_pk]:.2f} at r={r_grid[i_pk]:.4f} "
           f"(shuffled null at {np.nanmean(null_m):.2f})")
 
-    r_p, xi_p = compute_2pcf_people(xy, pop, ld["geom_norm"])
-    g, _ = su.fit_powerlaw_norm(r_p, xi_p)
-    print(f"gamma_people = {g:.3f}  (gamma_nodes = {ld['gamma_fit']:.3f})")
+    pcf_p = compute_2pcf_people(xy, pop, ld, full=True)
+    print("  " + su.describe_fit_window(pcf_p))
+    print(f"gamma_people = {pcf_p['gamma']:.3f}  (gamma_nodes = {ld['gamma_fit']:.3f})")

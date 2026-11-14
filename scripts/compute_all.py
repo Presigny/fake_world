@@ -142,7 +142,7 @@ def compute_one(name, ds, n_compare):
         for tag, xy, pop in [("data", ld["xy_norm"], ld["pop_data"]),
                              ("sp", spp["xy_norm"], spp["pop"]),
                              ("mh", xy_mh, m_mh)]:
-            mk = su.marked_clustering_2pcf(xy, pop, ld["geom_norm"])
+            mk = su.marked_clustering_2pcf(xy, pop, ld)
             store[f"{tag}_gamma_hi"] = _num(mk["gamma_hi"])
             store[f"{tag}_gamma_lo"] = _num(mk["gamma_lo"])
         store["pop_data_sorted"] = np.sort(ld["pop_data"])[::-1]

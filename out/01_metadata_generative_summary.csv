@@ -1,7 +1,7 @@
 variant,zipf,delta_gamma
-Data,1.228,0.065
-SP mixture + local density (a),1.316,0.153
-SP mixture + rank matching (b),1.228,0.153
-"SP mixture + SP/background split (c), mean of 10 draws",1.228,-0.19
-SP mixture + shuffled marks (null),1.316,-0.13
-SP tree + level option,1.161,-0.063
+Data,1.228,0.491
+SP mixture + local density (a),1.336,0.287
+SP mixture + rank matching (b),1.228,0.529
+"SP mixture + SP/background split (c), mean of 10 draws",1.228,-0.109
+SP mixture + shuffled marks (null),1.336,0.499
+SP tree + level option,1.162,0.033

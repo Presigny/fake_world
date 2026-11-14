@@ -248,7 +248,7 @@ def compute_LS_correlation_2019(DD,DR,RR,Nd,Nr_prime,Nr):
     """
     return (Nr*(Nr_prime-1)*DD)/(Nd*(Nd-1)*RR)-(((Nr_prime-1)*DR)/(Nd*RR))+1
 
-def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime,rmin,Nd,rmax,scale,nbins=20):
+def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime,rmin,Nd,rmax,scale,nbins=20,return_counts=False):
     """Compute the two_point correlation function using the scheme of Keinahen et al. (2019 -https://doi.org/10.1051/0004-6361/201935828) 
     Input:
         gdf_projected: geopandas of the system of points we are interested in in the right crs
@@ -261,9 +261,14 @@ def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime
         rmax: float maximal value below which the 2pcf will be computed
         scale: str linear or logscale at which the distances will be binned
         nbins: int number of bins between rmin and rmax
+        return_counts: if True, also return the raw pair counts per bin
+            (dict with DD, DR, RR, Nd, Nr_prime, Nr). DD[i] is the number of
+            data pairs in bin i, used by the minimum-pairs criterion of the
+            power-law fit (sp_helpers.fit_window).
     Output:
         r-edges: list of distance bins with length equals nbins
         xi: array of shape (nbins) that stor for each distance bin the value of the 2pcf
+        counts: only when return_counts=True
     """
     Nr = Nr_prime*N_run # Number of points of the effective catalog
     #Nr = len(gdf_projected)
@@ -296,6 +301,10 @@ def compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     hist_RR = hist_RR[:n] if len(hist_RR) > n else np.append(hist_RR, np.zeros(n - len(hist_RR), dtype=hist_RR.dtype))
     hist_DR = hist_DR[:n] if len(hist_DR) > n else np.append(hist_DR, np.zeros(n - len(hist_DR), dtype=hist_DR.dtype))
     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
+    if return_counts:
+        counts = dict(DD=hist_DD, DR=hist_DR, RR=hist_RR, Nd=Nd,
+                      Nr_prime=Nr_prime, Nr=Nr)
+        return r_edges, xi, counts
     return r_edges,xi
 
 def compute_two_point_correlation_2019_SP(gdf_projected,gdf_edge,crs,N_run,Nr_prime,rmin,Nd,rmax,scale,nbins=20):
@@ -358,7 +367,7 @@ def compute_two_point_correlation_jack(gdf_projected,gdf_edge,crs,N_run,Nr_prime
     xi= compute_LS_correlation_2019(hist_DD,hist_DR,hist_RR,Nd,Nr_prime,Nr)
     return r_edges,xi
 
-def PCF_with_variance(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,rmin=False):
+def PCF_with_variance(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,rmin=False,return_counts=False):
     """Compute k different instances of the 2 points correlation function for gdf_projected system, 
     to build a statistical varaince on the 2 pcf. For each instance the system is compared to N_run random catalog
     with an effective size of N_run*size
@@ -372,21 +381,44 @@ def PCF_with_variance(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,r
         rmax: float maximal value below which the 2pcf will be computed
         scale: str linear or logscale at which the distances will be binned
         nbins: int number of bins between rmin and rmax
+        return_counts: if True, also return the pair counts (dict with DD, the
+            data pairs per bin, identical for the k instances, and DR, RR
+            averaged over the k instances)
     Output:
         r-edges: list of distance bins with length equals nbins
         l_xi: array of shape (nbins,k) that stor for each distance bin the value of the 2pcf
+        counts: only when return_counts=True
     """
     l_xi = []
+    l_counts = []
     #rmin = 0
     if len(gdf_projected) == 1:
         number_point = len(gdf_projected.explode())
     else:
         number_point = len(gdf_projected)
     for i in range(k):
-        r_edges,xi = compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,size,rmin,number_point,rmax,scale,nbins=nbins)
+        r_edges,xi,c = compute_two_point_correlation_2019(gdf_projected,gdf_edge,crs,N_run,size,rmin,number_point,rmax,scale,nbins=nbins,return_counts=True)
         l_xi.append(xi)
+        l_counts.append(c)
     xi = np.mean(l_xi,axis=0)
+    if return_counts:
+        counts = _average_counts(l_counts)
+        return r_edges, np.array(l_xi), counts
     return r_edges,np.array(l_xi)
+
+
+def _average_counts(l_counts):
+    """Average the pair counts of several instances (dicts of
+    compute_two_point_correlation_2019). The histograms are cut to their
+    common length. DD is the mean of the data pairs per bin (identical
+    between instances that share the data, different between bootstrap
+    sub-samples)."""
+    n = min(len(c["DD"]) for c in l_counts)
+    out = dict(Nd=l_counts[0]["Nd"], Nr_prime=l_counts[0]["Nr_prime"],
+               Nr=l_counts[0]["Nr"], n_instances=len(l_counts))
+    for key in ("DD", "DR", "RR"):
+        out[key] = np.mean([c[key][:n] for c in l_counts], axis=0)
+    return out
 
 def PCF_with_variance_SP(gdf_projected,gdf_edge,crs,N_run,size,k,rmax,scale,nbins,rmin=False):
     l_xi = []
@@ -424,22 +456,31 @@ def generate_sobol_point(gdf_edge,size,crs,check_gpd=False):
 
 def compute_two_point_correlation_bootstrap(gdf_projected, gdf_edge, crs, N_run,
                                             Nr_prime, rmin, rmax, scale, nbins,
-                                            Nsample, N_real):
+                                            Nsample, N_real, return_counts=False):
     """2PCF on random subsamples, for large datasets.
 
     N_real times, Nsample points of gdf_projected are drawn without
     replacement and their 2PCF is computed with
-    compute_two_point_correlation_2019.
-    Output: r_edges, all_xi (array (N_real, nbins))
+    compute_two_point_correlation_2019. The bins (r_edges) are the ones of
+    the last sub-sample (rmin is its mean nearest-neighbour distance, which
+    changes little between sub-samples of the same size).
+    Output: r_edges, all_xi (array (N_real, nbins)), and with
+    return_counts=True the pair counts averaged over the sub-samples (DD is
+    then the mean number of data pairs per bin of one sub-sample).
     """
-    all_xi = []
+    all_xi, l_counts = [], []
     for _ in range(N_real):
         gdf_sample = gdf_projected.sample(Nsample, replace=False)
-        r_edges, xi = compute_two_point_correlation_2019(
+        r_edges, xi, c = compute_two_point_correlation_2019(
             gdf_sample, gdf_edge, crs, N_run, Nr_prime, rmin, Nsample,
-            rmax, scale, nbins)
+            rmax, scale, nbins, return_counts=True)
         all_xi.append(xi)
-    return r_edges, np.vstack(all_xi)
+        l_counts.append(c)
+    n = min(len(x) for x in all_xi)
+    all_xi = np.vstack([x[:n] for x in all_xi])
+    if return_counts:
+        return r_edges, all_xi, _average_counts(l_counts)
+    return r_edges, all_xi
 
 
 def compute_two_point_correlation_density_groups(gdf_points, path_border_geojson,

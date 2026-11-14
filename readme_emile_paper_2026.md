@@ -12,6 +12,66 @@ The files of `main` (root scripts, `2pcf*.ipynb`, `fit_Soneira_Peebles*.ipynb`,
 `generalized_2pcf.ipynb`, the extraction scripts) are not modified, except
 `src/methods_two_point_correlation.py` (backward compatible, see below).
 
+## Common structure (November 2026)
+
+After the discussion with Charles, the code of this branch follows one structure,
+shared with the pipeline of `main` (`scripts/readme.md`). Three points changed. The
+state before the change is commit `8d18f31`.
+
+**1. SP generation: the N-dimensional generator, also in 2D.**
+`sp_helpers.soneira_peebles_nd(eta, lamb, L, R, center, domain, rng)` is the only
+generator, called with `dim = 2` on the maps (`sp_helpers.build_sp_model(..., dim=2)`,
+`calibration.SP_DIM = 2`) and `dim = 3` on the connectome. At the border, a child that
+falls outside is drawn again alone, up to 64 times. The tree keeps its η^L leaves and
+its geometry, and the generation ends whatever the size of the territory. The two
+former options are worse: redrawing the whole tree until every point is inside
+(`check_inside`) does not end when η^L is large, and keeping only the inside points of
+a free tree (the former `build_sp_model`, now `build_sp_model_truncated`) removes whole
+branches near the border and changes the number of leaves. The radial law of a child
+is `r = R u^(1/dim)` (uniform in the disc, the definition of Soneira and Peebles);
+`radial="linear"` gives back `r = R u` of the former 2D code.
+
+**2. Amplitude ratio in log.**
+`sp_helpers.log_amplitude_ratio`: log a = ⟨log ξ_data − log ξ_SP⟩ over the bins of the
+fit window where both ξ are positive, then `n_rand = m_SP (a^(−1/2) − 1)`
+(`dilution_from_a`). The former ρ = ⟨ξ_data/ξ_SP⟩ was a mean of ratios: one bin where
+ξ_SP is close to zero could set it, it could be negative or above 1, and it was not
+symmetric in data and model. The mean of the logs has none of these problems, and γ
+and a are now measured on the same bins.
+
+**3. One 2PCF chain, with a minimum number of pairs per bin.**
+Every 2PCF goes through `methods_two_point_correlation.PCF_with_variance`: metres, 20
+logarithmic edges from the mean nearest-neighbour distance to r_max, ξ at the upper
+edge of the bin, Landy-Szalay with split random catalogues (5 × 7 000 points inside
+the border), k = 3 repetitions, fit weighted by their spread on the bins 1 to
+18. The comparison notebooks call it through `synthesis_utils.compute_2pcf(xy_norm, ld)`;
+the former normalised estimator `compute_2pcf_norm` is removed. The fit window
+(`sp_helpers.fit_window`) has one more rule: starting from the smallest r, a bin is
+dropped as long as it holds fewer than `MIN_PAIRS = 100` data pairs DD. The first bin
+with DD ≥ 100 opens the window and every bin above it is kept. The relative Poisson
+noise of a bin is 1/√DD, 10 % at 100 pairs; below, ξ is set by a handful of pairs. The
+pair counts come from `PCF_with_variance(..., return_counts=True)`, and the same window
+is used for γ and for log a. The notebooks that compute a 2PCF on a map recall these
+conventions in their second cell and print the window they used
+(`su.describe_fit_window`).
+
+What did not change: the files, the order of the calibration steps, the entry points
+(`scripts/calibrate_all.py`, `calibration.calibrate(name)`, `su.load_dataset`,
+`su.DATASETS`), and `methods_two_point_correlation.py` for existing callers. What
+changed for a caller:
+
+| Before | Now |
+|--------|-----|
+| `sh.build_sp_model(m, eta, gamma, R_ref, gdf_edge, crs)` (truncated tree, global `np.random`) | same call, now the N-dim generator; add `rng=np.random.default_rng(seed)`. Former behaviour: `build_sp_model_truncated` |
+| `su.compute_2pcf_norm(xy, geom)` → r normalised | `su.compute_2pcf(xy, ld)` → r in metres; `full=True` returns counts, fit and window |
+| `su.fit_powerlaw_norm(r, xi)` | `su.fit_gamma(r, xi, dd=None)` or `su.fit_powerlaw(pcf)` |
+| `su.build_sp_mixture(ds, gdf_edge, bounds, geom, r_data, xi_data, N)` | `su.build_sp_mixture(ds, ld, pcf_data, N)` |
+| `su.data_2pcf_at_N(ld, N)` → `(xy, r, xi)` | → `(xy, pcf)` with `pcf["r"]`, `pcf["xi"]`, `pcf["dd"]` |
+| `su.marked_clustering_2pcf(xy, pop, geom)`, `mm.delta_gamma(xy, pop, geom)`, `mm.compute_2pcf_people(xy, pop, geom)` | same with `ld` in place of `geom` |
+| `cal.dilution(...)` → `(rho, n_rand)` | → `(a, n_rand, info)`; columns `rho` → `a`, `log_a` in the summary |
+| territory chosen notebook by notebook | `cal.load_territory(ds)`: whole multipolygon, or the mainland when the entry of `DATASETS` has `largest_only=True` (France, whose border file holds the overseas territories, and Germany) |
+| `ld["r_data"]` normalised, `ld["r0_fit_norm"]` | `ld["r_data"]` in metres, `ld["r0_fit_m"]`, and the full dict `ld["pcf_data"]` |
+
 ## What is added
 
 ### Modules (`src/`)
@@ -19,9 +79,10 @@ The files of `main` (root scripts, `2pcf*.ipynb`, `fit_Soneira_Peebles*.ipynb`,
 | Path | Content |
 |------|---------|
 | `src/methods_two_point_correlation.py` | **modified**, backward compatible (see below) |
-| `src/sp_helpers.py` | SP generation inside a border, power-law fit, cross-2PCF m-scan, SP in arbitrary dimension (3D connectome) |
-| `src/calibration.py` | per-dataset calibration of the SP mixture (γ, η, m*, λ, L, ρ), the parameters of Table 1 |
-| `src/synthesis_utils.py` | dataset table (`DATASETS`), normalised 2PCF, SP + random mixture, competing point processes (Poisson, LGCP, Hawkes, Cox-Hawkes), JSD, cache of `compute_all.py` |
+| `src/sp_helpers.py` | SP generation in N dimensions inside a border (`soneira_peebles_nd`, used with `dim=2` on the maps and `dim=3` on the connectome), fit window with the minimum-pairs criterion, power-law fit, amplitude ratio in log, cross-2PCF m-scan |
+| `src/calibration.py` | per-dataset calibration of the SP mixture (γ, η, m*, λ, L, a), the parameters of Table 1 |
+| `src/synthesis_utils.py` | dataset table (`DATASETS`), 2PCF of a normalised point set with the calibration chain (`compute_2pcf`), SP + random mixture, competing point processes (Poisson, LGCP, Hawkes, Cox-Hawkes), JSD, cache of `compute_all.py` |
+| `src/powerlaw_fits.py` | estimators of γ compared in notebook 11 (weighted least squares, log-log, Poisson likelihood, `powerlaw` package) |
 | `src/metadata_marks.py` | population marks from local density, mark-correlation profiles |
 | `src/powergrid_sp.py` | grid growth on SP / city / uniform nodes, DC load flow and Joule losses |
 
@@ -34,12 +95,12 @@ short list of results. Outputs are kept, except in notebook 09 (see below).
 
 | Notebook | Result | Paper |
 |----------|--------|-------|
-| `calibration/*.ipynb` | original per-dataset calibration runs (March 2026), outputs kept | Table 1 |
+| `calibration/*.ipynb` | per-dataset calibration, one notebook per dataset, all on `src/calibration.py` | Table 1 |
 | `07_model_comparison` | SP mixture against Poisson, LGCP, Hawkes and Cox-Hawkes on the nine datasets | Table 2, Fig. 1 |
 | `08_benchmark_complexity` | cost of each model as a function of N | Fig. 2 |
 | `09_bstpp_inference` | SVI fits of LGCP, Hawkes and Cox-Hawkes with BSTPP | Table 2 |
-| `10_gamma_consistency` | γ_cal against the exponent of the comparison settings, exponent of the mixture, ranks over 10 realisations | Sec. 4, Limitations |
-| `11_calibration_fits` | least squares against maximum likelihood for γ_cal, sensitivity of ρ to the SP draw | Sec. 3.2, Limitations |
+| `10_gamma_consistency` | γ_cal against γ of the comparison extract with the common chain, effect of the minimum-pairs criterion, exponent and amplitude of the mixture over seeds, ranks over 10 realisations | Sec. 4, Limitations |
+| `11_calibration_fits` | least squares against maximum likelihood for γ_cal, sensitivity of the amplitude ratio to the SP draw (former ρ against log a) | Sec. 3.2, Limitations |
 | `01_metadata_generative_model` | population marks given to the SP nodes from the local density | not in the paper |
 | `02_metadata_observables` | observables that include the population (M_norm, people 2PCF) | not in the paper |
 | `03_estimator_comparison_belgium`, `_austria` | effect of the density estimator (k-NN or fixed radius) on the population coupling | not in the paper |
@@ -88,21 +149,24 @@ Figures (`out/*.pdf`) and caches are not tracked, the notebooks regenerate them.
 
 ## Calibration of the datasets
 
-The per-dataset analyses were first done in separate notebooks, one per
-dataset. They are in `notebooks/emile_2026/calibration/` with their original outputs, which
-give the values of Table 1 and of `out/00_dataset_calibration_reference.csv`.
-Only the import paths and the dataset labels were changed (the helpers now come
-from `src/sp_helpers.py`). These notebooks all repeat the same chain, which is
-now written once in `src/calibration.py`.
+The per-dataset analyses are in `notebooks/emile_2026/calibration/`, one notebook
+per dataset. They all call the same chain, written once in `src/calibration.py`,
+step by step. The original runs of March 2026, which give the values of Table 1 and
+of `out/00_dataset_calibration_reference.csv`, are in the git history (commit
+`8d18f31`).
 
 1. Territory in a metric CRS and reference radius `R_ref = 0.5 × perimeter / 2π`.
 2. Data 2PCF (Landy-Szalay, split random catalogues) and power-law fit, giving γ and r0.
 3. Branching factor η, the number of KMeans clusters that maximises the silhouette score.
 4. m-scan. The points are sorted by decreasing mark, the m first form A and the
    others B, and m* minimises `∫|ξ_AB(r)| dr`.
-5. SP fractal with `λ = η^(1/(2−γ))` and at least m* nodes inside the territory.
-6. Dilution by uniform points, `ρ = ⟨ξ_data/ξ_SP⟩`, `n_rand = m_SP (ρ^(−1/2) − 1)`,
-   then random deletion down to N nodes.
+5. SP fractal with `λ = η^(1/(2−γ))` and at least m* nodes inside the territory,
+   drawn by the N-dimensional generator with `dim = 2` (child-by-child rejection).
+6. Dilution by uniform points, `log a = ⟨log ξ_data − log ξ_SP⟩` on the fit window,
+   `n_rand = m_SP (a^(−1/2) − 1)`, then random deletion down to N nodes.
+
+In step 2 the fit window is the bins 1 to 18 minus the small-r bins with fewer than
+`MIN_PAIRS = 100` data pairs (see "Common structure").
 
 ```bash
 python scripts/calibrate_all.py                              # all datasets present
@@ -114,39 +178,38 @@ Two points matter when comparing with `out/00_dataset_calibration_reference.csv`
 - The random catalogues of the 2PCF are drawn without a fixed seed (as in
   `methods_two_point_correlation`), so γ and m* change slightly from one run
   to the next.
-- The amplitude ratio ρ depends strongly on the SP draw. On Belgium, the mean
-  ratio of ten SP draws goes from −0.03 to 2.3 in notebook 11, and the values
-  outside [0, 1] are clipped (to 1e-4 or 1). The median ratio is much more
-  stable (0.06 to 0.11). The SP draw is therefore seeded (`--seed`, 42 by
-  default), `calibration.py` prints a warning when ρ is clipped, and notebook 11
-  shows the spread over ten seeds.
+- The amplitude ratio depends on the SP draw, so the draw is seeded (`--seed`, 42
+  by default). On Belgium, over ten draws, a goes from 0.08 to 0.19 with the log
+  estimator (notebook 11). The former mean of the ratios ρ went from −0.29 to 0.35 on
+  the same draws and had to be clipped on two of them, which is why it was replaced.
 
-### Calibration exponent and comparison exponent
+### Calibration exponent and exponent of the comparison extract
 
-Table 1 gives γ_cal, from the calibration chain above. The model comparison
-measures the 2PCF with other settings (`synthesis_utils.compute_2pcf_norm`, on
-the extract of 3000 nodes), which give an exponent γ̂. The paper describes both
-settings (Sec. 3.2 and 4.1). Notebook 10 shows that the extract is not what
-separates them. The calibration chain is itself noisy, because its random
-catalogues are not reproducible. Five runs on the same extract have a standard
-deviation of 0.01 to 0.07, and their mean gives back γ_cal within 0.06 on seven
-of the nine datasets (0.09 for the Austrian cities, 0.10 for the train
-stations). On the same nodes, the gap with γ̂ is 6 to 10 standard deviations on
-the two city catalogues (−0.31 and −0.38) and the French municipalities (+0.25),
-4 to 5 on the RTE and ENEDIS substations, and within the noise elsewhere. It
-comes from the estimator. The two 2PCFs are fitted on different windows, with
-different bins and weights, and the empirical 2PCFs bend down at large r, so a
-single exponent depends on the window. Setting λ from γ̂ instead of γ_cal was
-tested. Both JSDs are then larger on five of the nine datasets, and the
-calibration is kept.
+Table 1 gives γ_cal, measured on the complete dataset. The model comparison works on
+an extract of 3 000 nodes. Both now use the same 2PCF chain, and notebook 10 checks
+what is left between them. Five runs on the same extract have a standard deviation of
+0.03 to 0.07 (0.12 on the 815 Belgian cities), which comes from the unseeded random
+catalogues. Their mean gives back γ_cal within 0.06 on seven of the nine datasets
+(+0.08 on Belgium, +0.13 on the railway stations). The gaps of up to 0.3 reported
+before November 2026 came from the second estimator of the comparison, which is
+removed. At N = 3 000 the first bin of the fit window holds 370 to 1 360 data pairs,
+so `MIN_PAIRS = 100` drops no bin on these datasets; it protects the fits on smaller
+samples.
 
-The calibration notebooks (`calibration/`) apply exactly the method of the
-paper, and their data exponent is γ_cal. They also print the exponent of the
-fractal alone ("SP γ"), fitted with the same estimator on one realisation. It
-differs from γ_cal by 0.25 to 0.33 on the municipalities, roads, German and
-Swiss stops, and by less than 0.08 elsewhere. Eq. (1) of the paper holds for the
-ensemble average and between r_min and R, whereas this check uses one clipped
-realisation on a fixed window, so the two need not agree.
+The mixture reproduces γ of the extract within 0.08 on four datasets (RTE, railway
+stations, ENEDIS, German stops) and is steeper by 0.14 to 0.30 on the five others,
+with a spread of 0.03 to 0.17 over five seeds.
+
+The calibration notebooks (`calibration/`) call `src/calibration.py` step by step.
+Belgium, Austria, RTE and the railway stations were run again with the common chain
+(November 2026); the five large sets (ENEDIS, municipalities, roads, German and Swiss
+stops) have the new code but no outputs yet. The values of
+`out/00_dataset_calibration_reference.csv` and of `DATASETS` are still those of the
+runs of March 2026 (Table 1). The new runs give γ = 0.84 (Belgium, 0.81 in Table 1),
+0.76 (Austria, 0.79), 0.91 (RTE, 0.93) and 0.76 (railway stations, 0.64). The notebooks
+also print the exponent of the fractal alone ("SP γ"), fitted with the same estimator
+on one realisation. Eq. (1) of the paper holds for the ensemble average and between
+r_min and R, so the two need not agree.
 
 ## Changes to `src/methods_two_point_correlation.py`
 
@@ -162,6 +225,10 @@ All of `main` is kept, nothing is removed or renamed.
   memory. Same output, same pair order as `pdist`, same `int32` truncation.
 - `compute_two_point_correlation_2019`: `hist_DR` and `hist_RR` are cut or
   zero-padded to the length of `hist_DD` (any gap, not only ±1).
+- `compute_two_point_correlation_2019`, `PCF_with_variance` and
+  `compute_two_point_correlation_bootstrap` take `return_counts=False`. With `True`
+  they also return the pair counts (`DD`, `DR`, `RR` per bin, and the sizes), which
+  the minimum-pairs criterion needs. The default output is unchanged.
 - Debug `print`s are commented out.
 - New functions. `compute_two_point_correlation_bootstrap` (sub-sampling for
   large N), `compute_two_point_correlation_density_groups` (2PCF by metadata
@@ -179,33 +246,12 @@ Checked on the Belgian cities with frozen random catalogues. `compute_DD`,
 | Here | On `main` | Status |
 |------|-----------|--------|
 | `sp_helpers.soneira_peebles_border` | `soneira_peebles_border` (notebook `fit_Soneira_Peebles`) | same generator, centroid seed, `r ~ U(0, R/λ^i)`, `θ ~ U(0, 2π)` |
-| `sp_helpers.build_sp_model` | `check_inside` | **differs**. `check_inside` redraws the whole tree until every point is inside, `build_sp_model` keeps the inside points and raises `L` until at least `m*` remain |
+| `sp_helpers.build_sp_model` (`soneira_peebles_nd`, `dim=2`) | `check_inside` | **differs**. `check_inside` redraws the whole tree until every point is inside, `build_sp_model` redraws each outside child alone (the tree keeps its η^L leaves) and raises `L` until at least `m*` nodes |
 | `λ = η^(1/(2-γ))` | same | same |
-| `n_rand = m_SP (1/√ρ − 1)`, `ρ = ⟨ξ_data/ξ_SP⟩` | `find_good_L`: `α = 1/⟨|ξ_SP/ξ_data|⟩`, `Nr = (1/√α − 1) η^L` | same dilution law, **different estimator of the amplitude ratio** (mean of the ratio against inverse of the mean of the inverse, all bins against bins with ξ_SP > 0) |
+| `n_rand = m_SP (1/√a − 1)`, `log a = ⟨log ξ_data − log ξ_SP⟩` | `find_good_L`: `α = 1/⟨|ξ_SP/ξ_data|⟩`, `Nr = (1/√α − 1) η^L` | same dilution law, **different estimator of the amplitude ratio** (mean of the logs on the fit window against inverse of the mean of the inverse ratio on all bins) |
 | `sp_helpers._run_cross_pcf` | `find_cross_2pcf` (notebook `generalized_2pcf`) | same formula, `[N² ξ − m² ξ_AA − (N−m)² ξ_BB] / (2m(N−m))` |
-| `sp_helpers.fit_2pcf` | power-law fit in notebook `2pcf` | same model `(r/r0)^-γ`, σ-weighted, bins `1:19`, adds bounds and NaN handling |
-| `synthesis_utils.compute_2pcf_norm` | `PCF_with_variance` | **different implementation**, see below |
-
-### `compute_2pcf_norm` against `PCF_with_variance`
-
-The model comparisons of the paper (JSD, constant-N protocol) use
-`compute_2pcf_norm`, written for coordinates normalised to [0,1]². It computes
-the same Landy-Szalay estimator with split random catalogues, with three
-differences.
-
-- Bins. `n_bins+1` log edges from `0.5 × mean NN distance` to `0.55 × max(DD)`,
-  with ξ placed at the geometric bin centre. `main` uses `nbins` edges from the
-  mean NN distance to `rmax`, with ξ placed at the upper edge of each bin
-  (this moves `r0`, not `γ`).
-- Random catalogue. One fixed seed, 5 × 5000 points, drawn inside the largest
-  polygon only (islands dropped). `main` draws with `sample_points` in the whole
-  multipolygon.
-- Fit (`fit_powerlaw_norm`). Unweighted, positive bins only.
-
-On the Belgian cities this gives γ̂ = 0.515, whereas `PCF_with_variance` with
-the weighted fit gives γ ≈ 0.81–0.90. The γ used to calibrate λ (`gamma_data` in
-`DATASETS`) comes from the `main` pipeline. The paper describes both settings in
-Sec. 3.2 and 4.1. Table 1 only gives γ_cal, and γ̂ appears in the Limitations.
+| `sp_helpers.fit_2pcf` | power-law fit in notebook `2pcf` and `scripts/fit_power_law.py` | same model `(r/r0)^-γ`, σ-weighted, bins `1:19`, adds bounds, NaN handling and the minimum-pairs criterion (`fit_power_law.py` drops the first bin, or the first two for three countries, by hand) |
+| `synthesis_utils.compute_2pcf` | `PCF_with_variance` | same function, called after mapping the normalised points back to metres |
 
 ## Data not included
 

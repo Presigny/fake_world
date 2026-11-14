@@ -142,8 +142,7 @@ def nodes_sp_mixture(ds, ld, N_target, seed=0):
     Returns (xy_m, is_urban) with is_urban == is_sp.
     """
     xy_norm, is_sp = su.build_sp_mixture(
-        ds, ld["gdf_edge"], ld["bounds"], ld["geom_norm"],
-        ld["r_data"], ld["xi_data"], N_target=N_target, seed=seed,
+        ds, ld, ld["pcf_data"], N_target=N_target, seed=seed,
         return_labels=True)
     return _denormalize(xy_norm, ld["bounds"]), is_sp
 
@@ -152,30 +151,31 @@ def nodes_sp_mixture_fixed(ds, ld, N_target, n_sp, seed=0):
     """SP mixture with an imposed number of structured nodes ("fixed threshold").
 
     Same as nodes_sp_mixture except that the fraction of fractal nodes is
-    not deduced from the 2PCF amplitude (rho) but imposed: n_sp points are
-    drawn at random in the SP fractal and the rest, up to N_target, is a
+    not deduced from the 2PCF amplitude (log a) but imposed: n_sp points
+    are drawn at random in the SP fractal and the rest, up to N_target, is a
     uniform background.
 
-    In build_sp_mixture the SP fraction is sqrt(rho) and varies from 0.15 to
-    0.21 between draws, while the growth-model paper uses urban_rate = 0.2.
+    In build_sp_mixture the SP fraction is sqrt(a) and varies between draws,
+    while the growth-model paper uses urban_rate = 0.2.
     Setting n_sp = 0.2 N_target (or the urban count drawn by nodes_cities
     with the same seed) gives both models an urban structure of the same
     size, which separates the effect of the cluster geometry from the effect
     of their number.
 
     The fractal is the one of nodes_sp_mixture for the same seed (same
-    np.random.seed(seed) before build_sp_model), so the two variants only
-    differ by the number of points kept.
+    np.random.default_rng(seed) passed to build_sp_model, N-dim generator
+    with dim = 2), so the two variants only differ by the number of points
+    kept.
 
     Returns (xy_m, is_sp), metric coordinates in shuffled order (the network
     growth depends on the insertion order).
     """
-    np.random.seed(seed)                     # build_sp_model uses the global RNG
     m_star_eff = ds["m_star"]
     if N_target < ds["N"]:
         m_star_eff = max(1, round(ds["m_star"] / ds["N"] * N_target))
     pos_sp, _, _ = build_sp_model(max(m_star_eff, n_sp), ds["eta"], ds["gamma_data"],
-                                  ds["R_ref_m"], ld["gdf_edge"], ds["crs"])
+                                  ds["R_ref_m"], ld["gdf_edge"], ds["crs"], dim=2,
+                                  rng=np.random.default_rng(seed), verbose=False)
 
     rng = np.random.default_rng(seed + 1)
     n_sp = min(int(n_sp), len(pos_sp), N_target)
