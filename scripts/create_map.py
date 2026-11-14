@@ -2,11 +2,39 @@
 
 import geopandas as gpd
 from pathlib import Path
-
-data_dir = Path.cwd().parent / Path("data/map")
+path_data = Path("/media/utente/LaCie/fake_world_data/map")
+#data_dir = Path.cwd().parent / Path("data/map")
+data_dir = path_data
 #### INPUT######
-l_country = ["Greece","Austria","Cyprus","United Kingdom","Germany","Luxembourg"]
-l_country = ["Spain"]
+l_country = [
+    "Austria",
+    "Belgium",
+    "Bulgaria",
+    "Croatia",
+    "Cyprus",
+    "Czechia",
+    "Denmark",
+    "Estonia",
+    "Finland",
+    "France",
+    "Germany",
+    "Greece",
+    "Hungary",
+    "Ireland",
+    "Italy",
+    "Latvia",
+    "Lithuania",
+    "Luxembourg",
+    "Malta",
+    "Netherlands",
+    "Poland",
+    "Portugal",
+    "Romania",
+    "Slovakia",
+    "Slovenia",
+    "Spain",
+    "Sweden"
+]
 ##################
 gpd = gpd.read_file(data_dir / "CNTR_RG_01M_2024_4326.geojson")
 for country in l_country:
@@ -16,4 +44,4 @@ for country in l_country:
         gpd_country = gpd_country.clip(gpd, (-5,40,10,52))
         
     gpd_country.plot()
-    gpd_country.to_file(str(data_dir) +"/"+ country+".geojson", driver='GeoJSON')
+   # gpd_country.to_file(str(data_dir) +"/"+ country+".geojson", driver='GeoJSON')
