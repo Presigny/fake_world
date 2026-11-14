@@ -281,6 +281,6 @@ cd notebooks/emile_2026 && jupyter lab      # notebooks add ../../src to sys.pat
 ```
 
 For the model comparison, run notebook 09 (BSTPP fits), then
-`scripts/compute_all.py`, then notebooks 07 and 10. Notebooks 00 to 06 and 08 are
-independent of them. Notebooks 00 to 03 (Belgium) run on the data of this branch
+`scripts/compute_all.py`, then notebooks 07 and 10. Notebooks 01 to 06 and 08 are
+independent of them. Notebooks 01 to 03 (Belgium) run on the data of this branch
 alone.
