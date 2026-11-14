@@ -33,7 +33,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import synthesis_utils as su
 
-CACHE = su.CACHE_DIR                 # out/synthesis_cache
+CACHE = su.CACHE_DIR                 # out/synthesis_cache, or out/synthesis_cache_cp (see su.CACHE_DIR)
 CACHE.mkdir(parents=True, exist_ok=True)
 
 N_COMPARE_DEFAULT = 3000          # constant N (capped at N_real and N_CAP_MODELS)

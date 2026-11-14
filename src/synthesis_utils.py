@@ -1032,7 +1032,13 @@ def nn_comparison(data_xy, model_xys, n_bins=25):
 # ---------------------------------------------------------------------------
 # Result cache written by scripts/compute_all.py
 # ---------------------------------------------------------------------------
-CACHE_DIR = ROOT / "out" / "synthesis_cache"
+# out/synthesis_cache can be a symbolic link to a cache shared with another
+# project, built with the former 2PCF chain. The caches of the common chain are
+# then written to and read from out/synthesis_cache_cp, so the shared one is
+# never overwritten (same rule as out/bstpp_results in notebook 09).
+_SHARED_CACHE = ROOT / "out" / "synthesis_cache"
+CACHE_DIR = (ROOT / "out" / "synthesis_cache_cp") if _SHARED_CACHE.is_symlink() \
+    else _SHARED_CACHE
 
 
 def cache_slug(name):

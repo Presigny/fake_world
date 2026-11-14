@@ -122,8 +122,7 @@ kept. The entry of `DATASETS`, the calibration notebook
 (Austria), 07 and 10 come from local runs on these data. The other notebooks
 skip a dataset whose files are missing.
 
-Notebook 09 is stored without outputs, because the SVI fits are long (5000
-steps per model and per dataset). By default (`FORCE_FIT = False`) it reloads
+The SVI fits of notebook 09 are long (5000 steps per model and per dataset). By default (`FORCE_FIT = False`) it reloads
 the models stored in `out/bstpp_results` and only fits the missing ones. When
 `out/bstpp_results` is a symbolic link, new fits are written to
 `out/bstpp_reinferred` instead, so the shared models are never overwritten.
@@ -133,7 +132,7 @@ the models stored in `out/bstpp_results` and only fits the missing ones. When
 | Path | Content |
 |------|---------|
 | `scripts/calibrate_all.py` | runs `calibration.py` on every dataset whose files are present, writes `out/00_dataset_calibration.csv` |
-| `scripts/compute_all.py` | incremental pre-computation for notebooks 07 and 10, one cache file per dataset in `out/synthesis_cache/` |
+| `scripts/compute_all.py` | incremental pre-computation for notebooks 07 and 10, one cache file per dataset in `out/synthesis_cache/`, or in `out/synthesis_cache_cp/` when `out/synthesis_cache` is a symbolic link |
 
 ### Data and results
 
@@ -272,11 +271,15 @@ it runs on.
   and notebook 06
 - `out/bstpp_results/`, the BSTPP models fitted by notebook 09, and
   `out/synthesis_cache/`, the caches of `compute_all.py`. Both can be regenerated.
+  When `out/synthesis_cache` is a symbolic link (cache shared with another project,
+  former chain), `compute_all.py` writes to and notebooks 07 and 10 read from
+  `out/synthesis_cache_cp/`, so the shared cache is never overwritten.
 
 ## Running
 
 ```bash
 pip install -r requirements.txt
+pip install --no-deps bstpp==0.1.4   # notebooks 07, 09, compute_all; see requirements.txt
 cd notebooks/emile_2026 && jupyter lab      # notebooks add ../../src to sys.path
 ```
 
