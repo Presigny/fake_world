@@ -69,7 +69,8 @@ import calibration as cal                               # noqa: E402
 from sp_helpers import (                                # noqa: E402
     build_sp_model, lambda_of_gamma, soneira_peebles_nd, domain_center,
     power_law, fit_2pcf, fit_window, log_amplitude_ratio, dilution_from_a,
-    _random_in_territory, _align, MIN_PAIRS, FIT_RANGE,
+    _random_in_territory, _align, MIN_PAIRS, FIT_RANGE, N_GAMMA_RUNS,
+    average_fits,
 )
 
 SEED = 42
@@ -87,8 +88,12 @@ N_BINS_MARKS = 18          # bins of the mark correlation function only
 # m_star                : number of "structured" points (cross-2PCF m-scan)
 # R_ref_m               : SP reference radius, 0.5 * perimeter / (2 pi)
 # rmax                  : maximum separation (m) of the calibration 2PCF
-# These values come from the per-dataset calibration
-# (out/00_dataset_calibration_reference.csv).
+# gamma_std             : spread of gamma over the N_GAMMA_RUNS runs of the 2PCF
+# These values come from the per-dataset calibration notebooks
+# (notebooks/emile_2026/calibration/, common chain, November 2026), written to
+# out/00_dataset_calibration.csv; gamma_data and r0_data_m are means over
+# N_GAMMA_RUNS = 5 runs. Table 1 of March 2026 (former chain) is kept in
+# out/00_dataset_calibration_reference.csv.
 
 _FR = ROOT / "data" / "clean_transport_dataset" / "France"
 _FR_BORDER = _FR / "france_nat_earth.geojson"
@@ -104,8 +109,8 @@ DATASETS = {
         path_border=ROOT / "data" / "map" / "Austria.geojson",
         path_csv=ROOT / "data" / "cities" / "Austria_cities.csv",
         threshold_variable="population", threshold=0,
-        N=2254, area_km2=83895,
-        gamma_data=0.789, r0_data_m=1945, rmax=300_000,
+        N=2254, area_km2=83_895,
+        gamma_data=0.770, gamma_std=0.061, r0_data_m=2200, rmax=300_000,
         eta=2, m_star=2142, R_ref_m=188_500,
     ),
     "Belgium Cities": dict(
@@ -113,8 +118,8 @@ DATASETS = {
         path_border=ROOT / "data" / "map" / "Belgium.geojson",
         path_csv=ROOT / "data" / "cities" / "Belgium_cities.csv",
         threshold_variable="population", threshold=0,
-        N=815, area_km2=30659,
-        gamma_data=0.808, r0_data_m=3083, rmax=200_000,
+        N=815, area_km2=30_659,
+        gamma_data=0.864, gamma_std=0.088, r0_data_m=2911, rmax=200_000,
         eta=2, m_star=718, R_ref_m=102_700,
     ),
     "RTE France": dict(
@@ -122,18 +127,18 @@ DATASETS = {
         path_border=_FR_BORDER,
         path_csv=_FR / "postes-electriques-rte.csv",
         threshold_variable="population_density", threshold=1,
-        N=4932, area_km2=538401,
-        gamma_data=0.931, r0_data_m=12427, rmax=160_000,
-        eta=6, m_star=3661, R_ref_m=496_900, largest_only=True,
+        N=4932, area_km2=538_401,
+        gamma_data=0.903, gamma_std=0.023, r0_data_m=12_679, rmax=160_000,
+        eta=6, m_star=3547, R_ref_m=496_900, largest_only=True,
     ),
     "Gares France": dict(
         name="France", crs="EPSG:2154",
         path_border=_FR_BORDER,
         path_csv=_FR / "noeuds_route500_gares.csv",
         threshold_variable="population_density", threshold=1,
-        N=3470, area_km2=538401,
-        gamma_data=0.643, r0_data_m=61622, rmax=160_000,
-        eta=6, m_star=2896, R_ref_m=496_900, largest_only=True,
+        N=3470, area_km2=538_401,
+        gamma_data=0.730, gamma_std=0.042, r0_data_m=50_208, rmax=160_000,
+        eta=6, m_star=3136, R_ref_m=496_900, largest_only=True,
     ),
     # Large datasets (N >> 10,000) are subsampled to N_data_cap points when
     # loaded: the O(N^2) cdist becomes impractical beyond that, and the
@@ -144,8 +149,8 @@ DATASETS = {
         path_csv=_FR / "postes-electriques-enedis.csv",
         threshold_variable="population_density", threshold=1,
         N=912_982, area_km2=538_401, N_data_cap=10_000,
-        gamma_data=0.954, r0_data_m=7_995, rmax=160_000,
-        eta=6, m_star=235_268, R_ref_m=496_900, largest_only=True,
+        gamma_data=0.919, gamma_std=0.030, r0_data_m=8417, rmax=160_000,
+        eta=6, m_star=256_337, R_ref_m=496_900, largest_only=True,
     ),
     "France Communes": dict(
         name="France", crs="EPSG:2154",
@@ -153,8 +158,8 @@ DATASETS = {
         path_csv=_FR / "noeuds_route500_commune.csv",
         threshold_variable="population_density", threshold=1,
         N=34_269, area_km2=538_401, N_data_cap=10_000,
-        gamma_data=0.254, r0_data_m=292, rmax=160_000,
-        eta=2, m_star=24_647, R_ref_m=496_900, largest_only=True,
+        gamma_data=0.250, gamma_std=0.005, r0_data_m=255, rmax=160_000,
+        eta=2, m_star=22_275, R_ref_m=496_900, largest_only=True,
     ),
     "France Routes": dict(
         name="France", crs="EPSG:2154",
@@ -162,8 +167,8 @@ DATASETS = {
         path_csv=_FR / "noeuds_route500_routes.csv",
         threshold_variable="population_density", threshold=1,
         N=897_965, area_km2=538_401, N_data_cap=10_000,
-        gamma_data=0.525, r0_data_m=1_744, rmax=160_000,
-        eta=7, m_star=625_121, R_ref_m=496_900, largest_only=True,
+        gamma_data=0.556, gamma_std=0.012, r0_data_m=1985, rmax=160_000,
+        eta=7, m_star=645_844, R_ref_m=496_900, largest_only=True,
     ),
     "Germany Stops": dict(
         name="Germany", crs="EPSG:4839",
@@ -171,7 +176,7 @@ DATASETS = {
         path_csv=ROOT / "data" / "clean_transport_dataset" / "Germany" / "localtransitgermany.csv",
         threshold_variable="population_density", threshold=1,
         N=660_298, area_km2=355_405, N_data_cap=10_000,
-        gamma_data=0.612, r0_data_m=4_384, rmax=160_000,
+        gamma_data=0.596, gamma_std=0.008, r0_data_m=4201, rmax=160_000,
         eta=4, m_star=413_956, R_ref_m=364_100, largest_only=True,
     ),
     "Swiss Stops": dict(
@@ -180,8 +185,8 @@ DATASETS = {
         path_csv=ROOT / "data" / "clean_transport_dataset" / "Switzerland" / "swiss_stops.csv",
         threshold_variable="population_density", threshold=1,
         N=93_288, area_km2=41_439, N_data_cap=10_000,
-        gamma_data=0.873, r0_data_m=6_690, rmax=160_000,
-        eta=12, m_star=56_331, R_ref_m=117_700,
+        gamma_data=0.858, gamma_std=0.005, r0_data_m=6285, rmax=160_000,
+        eta=12, m_star=52_026, R_ref_m=117_700,
     ),
 }
 
@@ -244,7 +249,7 @@ def denormalize_coords(xy_norm, bounds_metric):
                             xy_norm[:, 1] * scale + ymin])
 
 
-def compute_2pcf(xy_norm, ld, full=False, params=None, rmax=None):
+def compute_2pcf(xy_norm, ld, full=False, params=None, rmax=None, n_runs=1):
     """Landy-Szalay 2PCF of a normalised point set, with the calibration chain.
 
     The points are mapped back to the metric CRS of the dataset and passed
@@ -267,7 +272,17 @@ def compute_2pcf(xy_norm, ld, full=False, params=None, rmax=None):
         of `fit_powerlaw` (gamma, r0_m, errors, fit_mask, fit_info).
     params : dict like cal.PCF_PARAMS (default: cal.PCF_PARAMS).
     rmax : float, metres (default: ld["rmax"]).
+    n_runs : int. With n_runs > 1 the 2PCF is computed n_runs times with new
+        random catalogues (see `combine_runs`): xi is the mean over all the
+        realisations and gamma, r0 are the means of the fits of the runs,
+        with their spread in gamma_std. The data 2PCFs use
+        N_GAMMA_RUNS = 5 (load_dataset, data_2pcf_at_N), the model curves one
+        run.
     """
+    if n_runs > 1:
+        pcf = combine_runs([compute_2pcf(xy_norm, ld, full=True, params=params,
+                                         rmax=rmax) for _ in range(n_runs)])
+        return pcf if full else (pcf["r"], pcf["xi"])
     p = cal.PCF_PARAMS if params is None else params
     rmax = ld["rmax"] if rmax is None else rmax
     xy_m = denormalize_coords(xy_norm, ld["bounds"])
@@ -286,6 +301,34 @@ def compute_2pcf(xy_norm, ld, full=False, params=None, rmax=None):
     pcf = dict(r=r, xi=xi, l_xi=l_xi, xi_std=l_xi.std(axis=0),
                dd=np.asarray(counts["DD"])[:n], counts=counts, N=len(xy_m))
     pcf.update(fit_powerlaw(pcf))
+    pcf.update(gamma_std=0.0 if pcf["gamma"] is not None else None,
+               gamma_runs=[pcf["gamma"]], n_runs=1)
+    return pcf
+
+
+def combine_runs(runs):
+    """Merge independent runs of a 2PCF (dicts of compute_2pcf, full=True).
+
+    The realisations of every run are interpolated on the bins of the first
+    run and stacked (l_xi), xi is their mean. The power-law fits are those
+    of each run on its own window, averaged by sp_helpers.average_fits:
+    gamma, r0_m, gamma_err, r0_err_m are means, gamma_std is the spread over
+    the runs and gamma_runs the list of the exponents. dd, counts, fit_mask
+    and fit_info are those of the first run (the DD counts of a point set do
+    not depend on the random catalogue).
+    """
+    first = runs[0]
+    r = first["r"]
+    l_xi = np.vstack([np.array([_align_xi(q["r"], x, r) for x in q["l_xi"]])
+                      for q in runs])
+    fits = [(q["gamma"], q["r0_m"], q["gamma_err"], q["r0_err_m"]) for q in runs]
+    av = average_fits(fits)
+    pcf = dict(first)
+    pcf.update(l_xi=l_xi, xi=np.nanmean(l_xi, axis=0),
+               xi_std=np.nanstd(l_xi, axis=0), gamma=av["gamma"],
+               r0_m=av["r0"], gamma_err=av["gamma_err"], r0_err_m=av["r0_err"],
+               gamma_std=av["gamma_std"], gamma_runs=av["gamma_runs"],
+               n_runs=av["n_runs"])
     return pcf
 
 
@@ -511,13 +554,14 @@ def load_dataset(ds, compute_data_2pcf=True, verbose=True, largest_only=True):
         r0_fit_m=None,
     )
     if compute_data_2pcf:
-        pcf = compute_2pcf(xy_norm, ld, full=True)
+        pcf = compute_2pcf(xy_norm, ld, full=True, n_runs=N_GAMMA_RUNS)
         ld.update(pcf_data=pcf, r_data=pcf["r"], xi_data=pcf["xi"],
                   gamma_fit=pcf["gamma"], r0_fit_m=pcf["r0_m"])
         if verbose:
             print("  " + describe_fit_window(pcf))
             if pcf["gamma"] is not None:
-                print(f"  gamma_data={pcf['gamma']:.3f}  r0={pcf['r0_m'] / 1e3:.1f} km")
+                print(f"  gamma_data={pcf['gamma']:.3f} (mean of {pcf['n_runs']} runs, "
+                      f"spread {pcf['gamma_std']:.3f})  r0={pcf['r0_m'] / 1e3:.1f} km")
     return ld
 
 
@@ -527,14 +571,14 @@ def data_2pcf_at_N(ld, N_target, seed=SEED):
     Used to compare data and models at the same N. When N_target >= N_real,
     the full data and their precomputed 2PCF are returned.
     Returns (xy, pcf) with pcf the `compute_2pcf` dict (r, xi, dd, gamma,
-    fit_mask, ...).
+    fit_mask, ...), averaged over N_GAMMA_RUNS runs of the 2PCF.
     """
     if N_target >= ld["N_real"]:
         return ld["xy_norm"], ld["pcf_data"]
     rng = np.random.default_rng(seed)
     idx = rng.choice(ld["N_real"], size=N_target, replace=False)
     xy = ld["xy_norm"][idx]
-    return xy, compute_2pcf(xy, ld, full=True)
+    return xy, compute_2pcf(xy, ld, full=True, n_runs=N_GAMMA_RUNS)
 
 
 # ===========================================================================
@@ -918,13 +962,14 @@ def _cap_pts(xy, max_pts, seed=SEED):
 
 
 def marked_clustering_2pcf(xy, pop, ld, frac_high=0.2, min_pts=20,
-                           max_pts=6000):
+                           max_pts=6000, n_runs=N_GAMMA_RUNS):
     """2PCF of the high-population nodes versus the low-population nodes.
 
     If the mark is correlated with the structure, high-population nodes are
     more clustered (gamma_hi > gamma_lo). Gammas are NaN when a group has
     fewer than min_pts nodes. Each group is capped at max_pts nodes. The
-    2PCFs come from `compute_2pcf` (fit with the minimum-pairs window).
+    2PCFs come from `compute_2pcf` (fit with the minimum-pairs window), and
+    gamma_hi, gamma_lo are means over n_runs runs of the 2PCF.
     Returns dict(r_hi, xi_hi, r_lo, xi_lo, gamma_hi, gamma_lo, pcf_hi,
     pcf_lo).
     """
@@ -933,8 +978,8 @@ def marked_clustering_2pcf(xy, pop, ld, frac_high=0.2, min_pts=20,
         return dict(r_hi=None, xi_hi=None, r_lo=None, xi_lo=None,
                     gamma_hi=np.nan, gamma_lo=np.nan, pcf_hi=None, pcf_lo=None)
     xy_hi, xy_lo = _cap_pts(xy_hi, max_pts), _cap_pts(xy_lo, max_pts)
-    pcf_hi = compute_2pcf(xy_hi, ld, full=True)
-    pcf_lo = compute_2pcf(xy_lo, ld, full=True)
+    pcf_hi = compute_2pcf(xy_hi, ld, full=True, n_runs=n_runs)
+    pcf_lo = compute_2pcf(xy_lo, ld, full=True, n_runs=n_runs)
     nan = lambda g: np.nan if g is None else g
     return dict(r_hi=pcf_hi["r"], xi_hi=pcf_hi["xi"], r_lo=pcf_lo["r"],
                 xi_lo=pcf_lo["xi"], gamma_hi=nan(pcf_hi["gamma"]),

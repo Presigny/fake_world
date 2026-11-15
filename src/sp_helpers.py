@@ -318,6 +318,49 @@ def fit_window(r_edges, xi, dd=None, a=FIT_RANGE[0], b=FIT_RANGE[1],
     return mask, info
 
 
+#: independent runs of the 2PCF whose power-law fits are averaged
+N_GAMMA_RUNS = 5
+
+
+def average_fits(fits):
+    """Mean and spread of the power-law fits of independent runs of a 2PCF.
+
+    The random catalogues of the 2PCF are drawn without a fixed seed, so the
+    fitted exponent moves from one run to the next (spread 0.01 to 0.13 on
+    the extracts of N = 3 000 nodes, notebook 10), by as much as the gap
+    between two estimates we want to compare. Each run is fitted on its own
+    window and the exponents are averaged: gamma is the mean over the runs,
+    gamma_std their standard deviation (ddof = 1), gamma_err the mean
+    curve_fit error of one run.
+
+    Parameters
+    ----------
+    fits : list of (gamma, r0, gamma_err, r0_err), one per run, as returned
+        by `fit_2pcf` (four None for a failed fit, which is left out).
+
+    Returns
+    -------
+    dict(gamma, gamma_std, gamma_err, r0, r0_std, r0_err, gamma_runs,
+    r0_runs, n_runs, n_ok); gamma is None when every fit failed.
+    """
+    ok = [f for f in fits if f[0] is not None]
+    out = dict(n_runs=len(fits), n_ok=len(ok),
+               gamma_runs=[None if f[0] is None else float(f[0]) for f in fits],
+               r0_runs=[None if f[1] is None else float(f[1]) for f in fits])
+    if not ok:
+        out.update(gamma=None, gamma_std=None, gamma_err=None, r0=None,
+                   r0_std=None, r0_err=None)
+        return out
+    g = np.array([f[0] for f in ok], dtype=float)
+    r0 = np.array([f[1] for f in ok], dtype=float)
+    ddof = 1 if len(ok) > 1 else 0
+    out.update(gamma=float(g.mean()), gamma_std=float(g.std(ddof=ddof)),
+               gamma_err=float(np.mean([f[2] for f in ok])),
+               r0=float(r0.mean()), r0_std=float(r0.std(ddof=ddof)),
+               r0_err=float(np.mean([f[3] for f in ok])))
+    return out
+
+
 def fit_2pcf(r_edges, l_xi, a=FIT_RANGE[0], b=FIT_RANGE[1], dd=None,
              min_pairs=MIN_PAIRS, return_window=False):
     """
@@ -435,9 +478,17 @@ def _xi_mean(r_e, l_xi_loc):
     """
     Mean 2PCF across realisations, cut to the length of r_e.
 
-    NaN and +-Inf (bins with RR = 0) are replaced by 0.
+    NaN and +-Inf (bins with RR = 0) are replaced by 0. A NaN in some of the
+    realisations only (bins outside the grid of one run, see
+    calibration._fit_runs) is left out of the mean.
     """
-    xi = np.mean(l_xi_loc, axis=0)
+    arr = np.asarray(l_xi_loc, dtype=float)
+    arr = np.where(np.isfinite(arr), arr, np.nan)
+    with np.errstate(all="ignore"):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            xi = np.nanmean(arr, axis=0)
     n  = min(len(xi), len(r_e))
     xi = xi[:n]
     return np.nan_to_num(xi, nan=0.0, posinf=0.0, neginf=0.0)

@@ -322,7 +322,8 @@ def superpose_people(xy, pop, n_total=6000, jitter=0.0, seed=0):
     return out
 
 
-def compute_2pcf_people(xy, pop, ld, full=False, params=None):
+def compute_2pcf_people(xy, pop, ld, full=False, params=None,
+                        n_runs=su.N_GAMMA_RUNS):
     """People 2PCF, a Landy-Szalay estimator weighted by the marks.
 
     In expectation, it is the 2PCF of the cloud where each point is replaced
@@ -348,7 +349,17 @@ def compute_2pcf_people(xy, pop, ld, full=False, params=None):
     Returns (r_edges, xi). With full=True, a dict like compute_2pcf (r, xi,
     l_xi, dd = unweighted number of node pairs per bin, used by the
     minimum-pairs criterion of the fit, gamma, r0_m, fit_mask, fit_info).
+
+    The random catalogue is not seeded, so the estimator is computed n_runs
+    times (default N_GAMMA_RUNS = 5): xi is the mean of the runs and gamma
+    the mean of their fits, with the spread in gamma_std
+    (synthesis_utils.combine_runs).
     """
+    if n_runs > 1:
+        pcf = su.combine_runs([compute_2pcf_people(xy, pop, ld, full=True,
+                                                   params=params, n_runs=1)
+                               for _ in range(n_runs)])
+        return pcf if full else (pcf["r"], pcf["xi"])
     import calibration as cal
     import methods_two_point_correlation as mtpc
     p = cal.PCF_PARAMS if params is None else params

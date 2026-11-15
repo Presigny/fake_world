@@ -21,4 +21,3 @@ out/synthesis_cache
 out/*.pdf
 out/bstpp/
 out/bstpp_reinferred/
-out/00_dataset_calibration.csv

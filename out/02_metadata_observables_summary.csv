@@ -1,19 +1,19 @@
 observable,variant,value
 D_M (mass dimension) [not discriminant],Data,2.31
-D_M (mass dimension) [not discriminant],SP + local density (a),1.287
-D_M (mass dimension) [not discriminant],SP + rank matching (b),1.254
-D_M (mass dimension) [not discriminant],SP + SP/background split (c),1.257
+D_M (mass dimension) [not discriminant],SP + local density (a),1.189
+D_M (mass dimension) [not discriminant],SP + rank matching (b),1.162
+D_M (mass dimension) [not discriminant],SP + SP/background split (c),1.32
 D_M (mass dimension) [not discriminant],"Data, shuffled marks",2.276
 D_M (mass dimension) [not discriminant],Poisson + data marks,2.179
 "M_norm (peak, 1=no coupling)",Data,1.738
-"M_norm (peak, 1=no coupling)",SP + local density (a),2.729
-"M_norm (peak, 1=no coupling)",SP + rank matching (b),3.171
-"M_norm (peak, 1=no coupling)",SP + SP/background split (c),3.111
+"M_norm (peak, 1=no coupling)",SP + local density (a),4.346
+"M_norm (peak, 1=no coupling)",SP + rank matching (b),4.499
+"M_norm (peak, 1=no coupling)",SP + SP/background split (c),2.188
 "M_norm (peak, 1=no coupling)","Data, shuffled marks",1.104
 "M_norm (peak, 1=no coupling)",Poisson + data marks,1.219
 gamma_people,"Data, people",1.95
-gamma_people,"SP + local density (a), people",1.519
-gamma_people,"SP + rank matching (b), people",1.292
-gamma_people,"SP + SP/background split (c), people",1.232
-gamma_people,"Data, shuffled marks",0.307
-gamma_nodes,Data,0.888
+gamma_people,"SP + local density (a), people",1.95
+gamma_people,"SP + rank matching (b), people",1.95
+gamma_people,"SP + SP/background split (c), people",1.195
+gamma_people,"Data, shuffled marks",0.442
+gamma_nodes,Data,0.803

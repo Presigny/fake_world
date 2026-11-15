@@ -3,8 +3,8 @@ calibrate_all.py
 ================
 Run the SP mixture calibration (src/calibration.py) on every dataset of
 synthesis_utils.DATASETS whose files are present, and write the scalar
-results to out/00_dataset_calibration.csv (one row per dataset, same
-columns as out/00_dataset_calibration_reference.csv).
+results to out/00_dataset_calibration.csv (one row per dataset, through
+calibration.update_summary_csv; the rows of the other datasets are kept).
 
 Datasets whose border or point file is missing are skipped with a message.
 The large datasets (ENEDIS, roads, Germany) take from tens of minutes to a
@@ -43,11 +43,7 @@ def main():
     args = ap.parse_args()
 
     names = args.only or list(su.DATASETS)
-    rows = []
-    if OUT.exists():                 # keep the rows of datasets not recomputed
-        old = pd.read_csv(OUT)
-        rows = [r for r in old.to_dict("records") if r["name"] not in names]
-
+    df = None
     for name in names:
         ds = su.DATASETS[name]
         missing = [p for p in (ds["path_border"], ds["path_csv"]) if not Path(p).exists()]
@@ -60,19 +56,13 @@ def main():
                             n_jobs=args.n_jobs, seed=args.seed)
         row = {k: res[k] for k in cal.SUMMARY_KEYS}
         row["area_km2"] = float(res["gdf_edge"].area.sum() / 1e6)
-        rows.append(row)
+        df = cal.update_summary_csv(row, OUT)     # saved after each dataset
         print(f"[{name}] done in {time.time() - t0:.0f} s\n")
-        pd.DataFrame(rows).to_csv(OUT, index=False)     # save after each dataset
 
-    if rows:
-        df = pd.DataFrame(rows)
-        cols = ["name", "N", "area_km2"] + [k for k in cal.SUMMARY_KEYS
-                                            if k not in ("name", "N")]
-        df = df[cols]
-        df.to_csv(OUT, index=False)
+    if df is not None:
         print(f"written: {OUT.relative_to(ROOT)}")
-        print(df[["name", "N", "gamma", "bins_dropped_min_pairs", "eta", "m_star", "lamb", "L", "a"]]
-              .to_string(index=False))
+        print(df[["name", "N", "gamma", "gamma_std", "bins_dropped_min_pairs", "eta",
+                  "m_star", "lamb", "L", "a"]].to_string(index=False))
 
 
 if __name__ == "__main__":

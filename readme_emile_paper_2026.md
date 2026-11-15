@@ -55,6 +55,17 @@ is used for γ and for log a. The notebooks that compute a 2PCF on a map recall 
 conventions in their second cell and print the window they used
 (`su.describe_fit_window`).
 
+**γ averaged over runs (15 November 2026).** The random catalogues are drawn without
+a fixed seed, so a fitted γ moves from one run of the 2PCF to the next, by 0.01 to 0.13
+at N = 3 000 (notebook 10). Every γ of a data set is now the mean of the fits of
+`N_GAMMA_RUNS = 5` independent runs, each fitted on its own window
+(`sp_helpers.average_fits`), with the spread of the runs in `gamma_std`. This applies to
+γ_cal and γ_SP of the calibration (`cal.data_2pcf_runs`, `cal.sp_2pcf_runs`), to the
+data 2PCF of `su.load_dataset` and `su.data_2pcf_at_N` (`su.compute_2pcf(...,
+n_runs=5)`, merged by `su.combine_runs`), to γ_hi and γ_lo of Δγ, and to the people
+2PCF (`mm.compute_2pcf_people`, 5 runs by default). The γ of a model is the mean of the
+fits of its realisations (one run each, notebooks 06, 09, 10).
+
 What did not change: the files, the order of the calibration steps, the entry points
 (`scripts/calibrate_all.py`, `calibration.calibrate(name)`, `su.load_dataset`,
 `su.DATASETS`), and `methods_two_point_correlation.py` for existing callers. What
@@ -69,6 +80,7 @@ changed for a caller:
 | `su.data_2pcf_at_N(ld, N)` → `(xy, r, xi)` | → `(xy, pcf)` with `pcf["r"]`, `pcf["xi"]`, `pcf["dd"]` |
 | `su.marked_clustering_2pcf(xy, pop, geom)`, `mm.delta_gamma(xy, pop, geom)`, `mm.compute_2pcf_people(xy, pop, geom)` | same with `ld` in place of `geom` |
 | `cal.dilution(...)` → `(rho, n_rand)` | → `(a, n_rand, info)`; columns `rho` → `a`, `log_a` in the summary |
+| `cal.data_2pcf` + `cal.fit_gamma` (one run) | `cal.data_2pcf_runs(...)` → dict with `gamma` (mean of 5 runs), `gamma_std`, `r_edges`, `l_xi`, `counts`, `mask`, `win`; same for `cal.sp_2pcf_runs`. Summary columns `gamma_std`, `n_gamma_runs`, `gamma_SP_std`; rows written to `out/00_dataset_calibration.csv` by `cal.update_summary_csv` |
 | territory chosen notebook by notebook | `cal.load_territory(ds)`: whole multipolygon, or the mainland when the entry of `DATASETS` has `largest_only=True` (France, whose border file holds the overseas territories, and Germany) |
 | `ld["r_data"]` normalised, `ld["r0_fit_norm"]` | `ld["r_data"]` in metres, `ld["r0_fit_m"]`, and the full dict `ld["pcf_data"]` |
 
@@ -140,7 +152,8 @@ the models stored in `out/bstpp_results` and only fits the missing ones. When
 |------|---------|
 | `data/cities/Belgium_cities.csv`, `data/map/Belgium.geojson` | Belgian cities with population, and border |
 | `data/clean_transport_dataset/France/` | `france_nat_earth.geojson` (border), `postes-electriques-rte.csv` (RTE substations), `noeuds_route500_gares.csv` and `noeuds_route500_commune.csv` (IGN ROUTE500 stations and municipalities) |
-| `out/00_dataset_calibration_reference.csv` | calibration values used in the paper, with the notebook they come from |
+| `out/00_dataset_calibration_reference.csv` | calibration values of Table 1 (March 2026), with the notebook they come from |
+| `out/00_dataset_calibration.csv` | calibration with the common chain (November 2026), one row per dataset, read into `DATASETS` |
 | `out/*.csv` | summary tables written by the notebooks |
 | `requirements.txt` | pinned versions of the environment used to run the notebooks |
 
@@ -152,10 +165,12 @@ The per-dataset analyses are in `notebooks/emile_2026/calibration/`, one noteboo
 per dataset. They all call the same chain, written once in `src/calibration.py`,
 step by step. The original runs of March 2026, which give the values of Table 1 and
 of `out/00_dataset_calibration_reference.csv`, are in the git history (commit
-`8d18f31`).
+`8d18f31`). The runs of November 2026 (common chain) are in
+`out/00_dataset_calibration.csv` and in `DATASETS`.
 
 1. Territory in a metric CRS and reference radius `R_ref = 0.5 × perimeter / 2π`.
-2. Data 2PCF (Landy-Szalay, split random catalogues) and power-law fit, giving γ and r0.
+2. Data 2PCF (Landy-Szalay, split random catalogues) and power-law fit, giving γ and r0,
+   both means over 5 runs of the 2PCF.
 3. Branching factor η, the number of KMeans clusters that maximises the silhouette score.
 4. m-scan. The points are sorted by decreasing mark, the m first form A and the
    others B, and m* minimises `∫|ξ_AB(r)| dr`.
@@ -184,31 +199,50 @@ Two points matter when comparing with `out/00_dataset_calibration_reference.csv`
 
 ### Calibration exponent and exponent of the comparison extract
 
-Table 1 gives γ_cal, measured on the complete dataset. The model comparison works on
-an extract of 3 000 nodes. Both now use the same 2PCF chain, and notebook 10 checks
-what is left between them. Five runs on the same extract have a standard deviation of
-0.03 to 0.07 (0.12 on the 815 Belgian cities), which comes from the unseeded random
-catalogues. Their mean gives back γ_cal within 0.06 on seven of the nine datasets
-(+0.08 on Belgium, +0.13 on the railway stations). The gaps of up to 0.3 reported
-before November 2026 came from the second estimator of the comparison, which is
-removed. At N = 3 000 the first bin of the fit window holds 370 to 1 360 data pairs,
-so `MIN_PAIRS = 100` drops no bin on these datasets; it protects the fits on smaller
+γ_cal is measured on the complete dataset, the model comparison works on an extract of
+3 000 nodes. Both use the same 2PCF chain and the mean over 5 runs, and notebook 10
+checks what is left between them. On the extract, the spread over runs is 0.01 (German
+stops) to 0.13 (Austrian cities), from the unseeded random catalogues. The mean gives
+back γ_cal within 0.09 on the nine datasets (−0.05 to +0.08). The gaps of up to 0.3
+reported before November 2026 came from the second estimator of the comparison, which is
+removed. At N = 3 000 the first bin of the fit window holds 370 to 1 360 data pairs, so
+`MIN_PAIRS = 100` drops no bin on these datasets; it protects the fits on smaller
 samples.
 
-The mixture reproduces γ of the extract within 0.08 on four datasets (RTE, railway
-stations, ENEDIS, German stops) and is steeper by 0.14 to 0.30 on the five others,
-with a spread of 0.03 to 0.17 over five seeds.
+The mixture reproduces γ of the extract within 0.11 on three datasets (RTE, ENEDIS,
+German stops) and is steeper by 0.16 to 0.38 on the six others, with a spread of 0.08
+to 0.18 over five seeds. On the 2PCF JSD the SP has the best mean rank, with one
+realisation (2.11, then LGCP 2.22) and with the mean of ten (1.78, then LGCP 2.56). On
+the nearest-neighbour distances it is third (2.89).
 
-The calibration notebooks (`calibration/`) call `src/calibration.py` step by step.
-Belgium, Austria, RTE and the railway stations were run again with the common chain
-(November 2026); the five large sets (ENEDIS, municipalities, roads, German and Swiss
-stops) have the new code but no outputs yet. The values of
-`out/00_dataset_calibration_reference.csv` and of `DATASETS` are still those of the
-runs of March 2026 (Table 1). The new runs give γ = 0.84 (Belgium, 0.81 in Table 1),
-0.76 (Austria, 0.79), 0.91 (RTE, 0.93) and 0.76 (railway stations, 0.64). The notebooks
-also print the exponent of the fractal alone ("SP γ"), fitted with the same estimator
-on one realisation. Eq. (1) of the paper holds for the ensemble average and between
-r_min and R, so the two need not agree.
+The calibration notebooks (`calibration/`) call `src/calibration.py` step by step. All
+nine were run again with the common chain and the mean over 5 runs (15 November 2026).
+Their rows are in `out/00_dataset_calibration.csv`, and `DATASETS` now holds these
+values (γ, r0, η, m*, R_ref, plus `gamma_std`). Table 1 of March 2026 stays in
+`out/00_dataset_calibration_reference.csv`.
+
+| Dataset | γ (spread) | Table 1 | η | m* (Table 1) | γ_SP (spread) | a |
+|---|---|---|---|---|---|---|
+| Austria Cities | 0.770 (0.061) | 0.789 | 2 | 2 142 (2 142) | 0.819 (0.009) | 0.079 |
+| Belgium Cities | 0.864 (0.088) | 0.808 | 2 | 718 (718) | 0.928 (0.026) | 0.117 |
+| RTE France | 0.903 (0.023) | 0.930 | 6 | 3 547 (3 661) | 1.164 (0.529) | 0.135 |
+| Gares France | 0.730 (0.042) | 0.643 | 6 | 3 136 (2 896) | 0.915 (0.471) | 0.494 |
+| ENEDIS France | 0.919 (0.030) | 0.954 | 6 | 256 337 (235 268) | 1.016 (0.018) | 0.082 |
+| France Communes | 0.250 (0.005) | 0.254 | 2 | 22 275 (24 647) | 0.669 (0.017) | 0.235 |
+| France Routes | 0.556 (0.012) | 0.525 | 7 | 645 844 (625 121) | 0.761 (0.015) | 0.106 |
+| Germany Stops | 0.596 (0.008) | 0.612 | 4 | 413 956 (413 956) | 0.880 (0.012) | 0.158 |
+| Swiss Stops | 0.858 (0.005) | 0.873 | 12 | 52 026 (56 331) | 0.907 (0.019) | 0.266 |
+
+- γ moves by 0.004 to 0.06 from Table 1, except on the railway stations (+0.09). η is
+  unchanged everywhere. The spread over runs is 0.02 to 0.09 on the four small sets
+  (N < 5 000), and 0.03 or less on the five large ones.
+- γ_SP is the exponent of the fractal alone, fitted with the same estimator. Eq. (1) of
+  the paper holds for the ensemble average and between r_min and R, so it need not
+  equal γ. On RTE and the railway stations (η = 6, N < 5 000) it moves by ±0.5 from one
+  run to the next: the SP clumps are much smaller than the spacing of the random
+  catalogue, the first bins hold 1 to 10 RR pairs, and `MIN_PAIRS` only counts DD.
+  γ_SP does not enter `DATASETS`; a, which uses the mean ξ_SP over the window, is
+  affected on these two sets. A criterion on min(DD, RR) is an open question.
 
 ## Changes to `src/methods_two_point_correlation.py`
 

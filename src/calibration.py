@@ -11,7 +11,9 @@ Steps (one function each):
      `bootstrap_size` points) and power-law fit on the fit window, giving
      gamma and r0. The window is the bins FIT_RANGE = [1, 19) minus the
      small-r bins holding fewer than MIN_PAIRS data pairs
-     (sp_helpers.fit_window)
+     (sp_helpers.fit_window). The 2PCF is computed N_GAMMA_RUNS = 5 times
+     (unseeded random catalogues) and gamma, r0 are the means of the fits
+     of the runs (sp_helpers.average_fits)
   3. branching factor eta, the number of KMeans clusters that maximises the
      silhouette score
   4. m-scan: the data are sorted by decreasing mark (population or
@@ -29,8 +31,11 @@ The original runs are the notebooks of notebooks/emile_2026/calibration/,
 and scripts/calibrate_all.py runs all datasets and writes out/00_dataset_calibration.csv.
 
 The random catalogues of the 2PCF are drawn without a fixed seed (as in
-methods_two_point_correlation), so two runs differ slightly. The values
-obtained for the paper are kept in out/00_dataset_calibration_reference.csv.
+methods_two_point_correlation), so two runs differ slightly; this is why
+gamma_cal and gamma_SP are means over N_GAMMA_RUNS runs. The values of the
+March 2026 version of the paper (former chain) are kept in
+out/00_dataset_calibration_reference.csv; the runs of the common chain write
+out/00_dataset_calibration.csv (update_summary_csv).
 
 The amplitude ratio is estimated in log (sp_helpers.log_amplitude_ratio).
 The former ratio estimators (alpha = 1/<|xi_SP/xi_data|> and
@@ -56,6 +61,7 @@ from sp_helpers import (                             # noqa: E402
     build_sp_model, fit_2pcf, fit_window, log_amplitude_ratio,
     dilution_from_a, _xi_mean, _align, _pcf_safe,
     _random_in_territory, _run_cross_pcf, MIN_PAIRS, FIT_RANGE,
+    N_GAMMA_RUNS, average_fits,
 )
 
 # 2PCF parameters of the calibration (same for every dataset)
@@ -162,6 +168,49 @@ def fit_gamma(r_edges, l_xi, dd=None, fit_range=FIT_RANGE,
                     min_pairs=min_pairs, return_window=return_window)
 
 
+def _fit_runs(compute, n_runs):
+    """Run `compute` n_runs times and average the power-law fits.
+
+    compute() returns (r_edges, l_xi, counts) for one run of the 2PCF. Each
+    run is fitted on its own window (minimum-pairs criterion on its DD
+    counts). The realisations of all the runs are interpolated on the bins
+    of the first run and stacked, so that their mean is the 2PCF averaged
+    over n_runs x k realisations.
+    Returns a dict: r_edges, l_xi (array, n_runs x k rows), counts, mask and
+    win (window of the first run), and the keys of sp_helpers.average_fits
+    (gamma, gamma_std, gamma_err, r0, r0_std, r0_err, gamma_runs, ...).
+    """
+    runs = [compute() for _ in range(n_runs)]
+    r_edges, _, counts = runs[0]
+    r_edges = np.asarray(r_edges, dtype=float)
+    fits, l_all, mask, win = [], [], None, None
+    for r_e, l_xi, c in runs:
+        g, r0, g_err, r0_err, (m_k, w_k) = fit_gamma(r_e, l_xi, dd=c["DD"],
+                                                    return_window=True)
+        fits.append((g, r0, g_err, r0_err))
+        if mask is None:
+            mask, win = m_k, w_k
+        r_e = np.asarray(r_e, dtype=float)
+        for x in l_xi:
+            x = np.asarray(x, dtype=float)
+            n = min(len(x), len(r_e))
+            l_all.append(np.interp(np.log10(r_edges), np.log10(r_e[:n]), x[:n],
+                                   left=np.nan, right=np.nan))
+    out = dict(r_edges=r_edges, l_xi=np.array(l_all), counts=counts,
+               mask=mask, win=win)
+    out.update(average_fits(fits))
+    return out
+
+
+def data_2pcf_runs(gdf_projected, gdf_edge, crs, rmax, n_runs=N_GAMMA_RUNS,
+                   params=PCF_PARAMS):
+    """Data 2PCF computed n_runs times, with gamma and r0 averaged over the
+    fits of the runs (see _fit_runs). gamma is gamma_cal of Table 1."""
+    return _fit_runs(lambda: data_2pcf(gdf_projected, gdf_edge, crs, rmax,
+                                       params=params, return_counts=True),
+                     n_runs)
+
+
 # ===========================================================================
 # 3. Branching factor eta (silhouette)
 # ===========================================================================
@@ -259,6 +308,15 @@ def sp_2pcf(pos_sp, gdf_edge, crs, rmax, params=PCF_PARAMS,
                      return_counts=return_counts)
 
 
+def sp_2pcf_runs(pos_sp, gdf_edge, crs, rmax, n_runs=N_GAMMA_RUNS,
+                 params=PCF_PARAMS):
+    """2PCF of one SP draw computed n_runs times, gamma_SP averaged over the
+    fits of the runs (see _fit_runs)."""
+    return _fit_runs(lambda: sp_2pcf(pos_sp, gdf_edge, crs, rmax,
+                                     params=params, return_counts=True),
+                     n_runs)
+
+
 def build_sp(m_star, eta, gamma, R_ref, gdf_edge, crs, seed=42,
              radial="uniform", dim=SP_DIM):
     """SP fractal with at least m_star nodes inside the territory, drawn by
@@ -345,14 +403,16 @@ def final_realisations(pos_mix, labels, N, gdf_edge, crs, r_edges, rmax,
 # ===========================================================================
 
 def calibrate(name, datasets=None, n_scan=40, n_real=5, n_jobs=None,
-              seed=42, verbose=True):
+              seed=42, n_gamma_runs=N_GAMMA_RUNS, verbose=True):
     """Run the full calibration of one dataset of synthesis_utils.DATASETS.
 
     Returns a dict holding the scalar results (N, R_ref, gamma, r0, eta, m*,
     lambda, L, m_SP, gamma_SP, a, log_a, n_rand, final SP and random counts,
     fit window) and the arrays needed for the figures (2PCFs, pair counts,
     silhouette and m-scan curves, final positions). `seed` fixes the SP draw.
-    The random catalogues of the 2PCF are not seeded.
+    The random catalogues of the 2PCF are not seeded: gamma and gamma_SP are
+    means over n_gamma_runs runs of the 2PCF (gamma_std, gamma_SP_std give
+    the spread over the runs).
     """
     if datasets is None:
         import synthesis_utils as su
@@ -366,16 +426,17 @@ def calibrate(name, datasets=None, n_scan=40, n_real=5, n_jobs=None,
     N = len(coords)
     say(f"[{name}] N={N:,}  R_ref={R_ref / 1e3:.1f} km")
 
-    r_edges, l_xi, counts = data_2pcf(gdf_projected, gdf_edge, crs, rmax,
-                                      return_counts=True)
-    gamma, r0, gamma_err, r0_err, (mask, win) = fit_gamma(
-        r_edges, l_xi, dd=counts["DD"], return_window=True)
+    dr = data_2pcf_runs(gdf_projected, gdf_edge, crs, rmax, n_runs=n_gamma_runs)
+    r_edges, l_xi, counts = dr["r_edges"], dr["l_xi"], dr["counts"]
+    gamma, r0, gamma_err, r0_err = dr["gamma"], dr["r0"], dr["gamma_err"], dr["r0_err"]
+    mask, win = dr["mask"], dr["win"]
     xi_data = _xi_mean(r_edges, l_xi)
     say(f"[{name}] fit window: bins {win['first']}..{win['last']} "
         f"({win['r_lo'] / 1e3:.2f}-{win['r_hi'] / 1e3:.1f} km), "
         f"{len(win['dropped_min_pairs'])} small-r bin(s) dropped "
         f"(DD < {win['min_pairs']})")
-    say(f"[{name}] gamma={gamma:.4f} +- {gamma_err:.4f}  r0={r0:.0f} m")
+    say(f"[{name}] gamma={gamma:.4f} (mean of {dr['n_ok']} runs, spread "
+        f"{dr['gamma_std']:.4f}, fit error {gamma_err:.4f})  r0={r0:.0f} m")
 
     eta, k_values, sil_means, sil_stds = silhouette_eta(coords)
     say(f"[{name}] eta={eta}  (silhouette {sil_means.max():.4f})")
@@ -390,12 +451,11 @@ def calibrate(name, datasets=None, n_scan=40, n_real=5, n_jobs=None,
     pos_sp, L_sp, lamb_sp = build_sp(m_star, eta, gamma, R_ref, gdf_edge,
                                      crs, seed=seed)
     m_sp = len(pos_sp)
-    r_e_sp, l_xi_sp, counts_sp = sp_2pcf(pos_sp, gdf_edge, crs, rmax,
-                                         return_counts=True)
+    spr = sp_2pcf_runs(pos_sp, gdf_edge, crs, rmax, n_runs=n_gamma_runs)
+    r_e_sp, l_xi_sp, counts_sp = spr["r_edges"], spr["l_xi"], spr["counts"]
     xi_sp = _xi_mean(r_e_sp, l_xi_sp)
     r_e_sp = r_e_sp[:len(xi_sp)]
-    gamma_sp, r0_sp, gamma_sp_err, _ = fit_gamma(r_e_sp, l_xi_sp,
-                                                 dd=counts_sp["DD"])
+    gamma_sp, r0_sp, gamma_sp_err = spr["gamma"], spr["r0"], spr["gamma_err"]
     say(f"[{name}] SP: lambda={lamb_sp:.3f} L={L_sp} m_SP={m_sp:,} "
         f"gamma_SP={gamma_sp:.4f}")
 
@@ -410,19 +470,22 @@ def calibrate(name, datasets=None, n_scan=40, n_real=5, n_jobs=None,
 
     return dict(
         name=name, N=N, R_ref_m=R_ref, rmax=rmax,
-        gamma=gamma, gamma_err=gamma_err, r0_m=r0, r0_err_m=r0_err,
+        gamma=gamma, gamma_std=dr["gamma_std"], gamma_err=gamma_err,
+        n_gamma_runs=dr["n_ok"], r0_m=r0, r0_err_m=r0_err,
         fit_first_bin=win["first"], fit_last_bin=win["last"],
         fit_r_lo_m=win["r_lo"], fit_r_hi_m=win["r_hi"],
         bins_dropped_min_pairs=len(win["dropped_min_pairs"]),
         eta=eta, silhouette=float(sil_means.max()),
         m_min=int(m_arr.min()), m_max=int(m_arr.max()), m_star=m_star,
         lamb=lamb_sp, L=L_sp, m_SP=m_sp,
-        gamma_SP=gamma_sp, gamma_SP_err=gamma_sp_err,
+        gamma_SP=gamma_sp, gamma_SP_std=spr["gamma_std"],
+        gamma_SP_err=gamma_sp_err,
         a=a, log_a=dil["log_a"], n_rand=n_rand, final_SP=n_sp_final,
         final_random=N - n_sp_final,
         # arrays for the figures
         gdf_edge=gdf_edge, coords=coords, marks=marks,
         r_edges=r_edges, l_xi=l_xi, xi_data=xi_data, counts=counts,
+        gamma_runs=dr["gamma_runs"], gamma_SP_runs=spr["gamma_runs"],
         fit_mask=mask, fit_window=win,
         k_values=k_values, sil_means=sil_means, sil_stds=sil_stds,
         m_arr=m_arr, int_arr=int_arr, xi_cross_star=scan[i_star]["xi"],
@@ -435,9 +498,39 @@ def calibrate(name, datasets=None, n_scan=40, n_real=5, n_jobs=None,
 
 
 #: scalar keys of the calibrate() result, in the order of the summary table
-SUMMARY_KEYS = ["name", "N", "R_ref_m", "rmax", "gamma", "gamma_err", "r0_m",
+SUMMARY_KEYS = ["name", "N", "R_ref_m", "rmax", "gamma", "gamma_std",
+                "gamma_err", "n_gamma_runs", "r0_m",
                 "r0_err_m", "fit_first_bin", "fit_last_bin", "fit_r_lo_m",
                 "fit_r_hi_m", "bins_dropped_min_pairs",
                 "eta", "silhouette", "m_min", "m_max", "m_star",
-                "lamb", "L", "m_SP", "gamma_SP", "gamma_SP_err", "a", "log_a",
+                "lamb", "L", "m_SP", "gamma_SP", "gamma_SP_std", "gamma_SP_err", "a",
+                "log_a",
                 "n_rand", "final_SP", "final_random"]
+
+SUMMARY_CSV = _SRC.parent / "out" / "00_dataset_calibration.csv"
+
+
+def update_summary_csv(row, path=SUMMARY_CSV):
+    """Write one calibration row (keys of SUMMARY_KEYS, plus area_km2) to the
+    calibration table, replacing the former row of the same dataset.
+    Used by the calibration notebooks and by scripts/calibrate_all.py.
+    Returns the table (pandas DataFrame)."""
+    import pandas as pd
+    path = Path(path)
+    rows = []
+    if path.exists():
+        rows = [r for r in pd.read_csv(path).to_dict("records")
+                if r["name"] != row["name"]]
+    rows.append(dict(row))
+    df = pd.DataFrame(rows)
+    import synthesis_utils as su
+    rank = {n: i for i, n in enumerate(su.DATASETS)}
+    df = (df.assign(_rank=df["name"].map(rank).fillna(len(rank)))
+            .sort_values("_rank", kind="stable").drop(columns="_rank")
+            .reset_index(drop=True))
+    cols = ["name", "N", "area_km2"] + [k for k in SUMMARY_KEYS
+                                        if k not in ("name", "N")]
+    df = df[[c for c in cols if c in df.columns]
+            + [c for c in df.columns if c not in cols]]
+    df.to_csv(path, index=False)
+    return df

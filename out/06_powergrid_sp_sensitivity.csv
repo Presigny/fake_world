@@ -1,25 +1,25 @@
 family,variant,joule_pct,joule_pct_std,note
-voltage,flow,3.8327061630965984,0.7493344298897762,"default, sizing by flow"
-voltage,time,33.641077419627514,12.56999237911927,sorted queue of the paper (creation order)
-voltage,length,27.973091609739274,4.295746702528729,longest line = highest voltage
-voltage,random,139.15326620144998,48.80490547198963,"spectrum kept, correlation destroyed"
-production,random,4.407925477515743,0.8599809053210701,"default, plants anywhere"
-production,rural,6.753658867155139,1.2194902753699561,plants in the random background
-production,urban,5.106763094421651,1.2591299376022718,plants in the SP clusters
-recipe,P shuffled,3.8327061630965984,0.7493344298897762,"default of section 6, published vector, neutral placement"
-recipe,P sorted,2.993791043253159,0.30260396120988914,"section 6, published vector, assignment of the paper"
-recipe,load reshuffled,4.407925477515743,0.8599809053210701,"real load marginal, random production"
-recipe,κ = 0.0,4.210765364200869,0.7675020621317926,"chain of the paper, flat load"
-recipe,κ = 0.25,4.7717957986833035,0.6493445672286785,
-recipe,κ = 0.5,7.013423445539114,1.1597270131664168,
-recipe,κ = 1.0,13.817290427238557,2.7562952616566703,load ∝ population metadata
-κ = 1: other models,SP20,14.17744842764371,6.75976302012189,SP with imposed threshold
+voltage,flow,4.493063812408928,0.9837621368336258,"default, sizing by flow"
+voltage,time,40.48027171376485,10.056469081299932,sorted queue of the paper (creation order)
+voltage,length,30.891093129512146,8.980268381756103,longest line = highest voltage
+voltage,random,135.2746725720533,35.88519411919753,"spectrum kept, correlation destroyed"
+production,random,4.849743703129567,0.9137628107515982,"default, plants anywhere"
+production,rural,7.236885504324573,2.751091500911511,plants in the random background
+production,urban,5.945545932641844,1.060011115463328,plants in the SP clusters
+recipe,P shuffled,4.493063812408928,0.9837621368336258,"default of section 6, published vector, neutral placement"
+recipe,P sorted,2.781601123837964,0.5982928895255473,"section 6, published vector, assignment of the paper"
+recipe,load reshuffled,4.849743703129567,0.9137628107515982,"real load marginal, random production"
+recipe,κ = 0.0,4.676717963319414,0.8801513270578128,"chain of the paper, flat load"
+recipe,κ = 0.25,5.306719395910077,1.570374669791441,
+recipe,κ = 0.5,7.253260985096448,2.9948022994313757,
+recipe,κ = 1.0,13.432151608358126,5.692832795510873,load ∝ population metadata
+κ = 1: other models,SP20,13.767065058599883,6.257431398923659,SP with imposed threshold
 κ = 1: other models,ORI,12.993457288674875,2.8846289158355707,11 cities (paper)
 κ = 1: other models,RAND,5.946584478775733,1.1559943976579827,"uniform control, no city"
 κ = 1: other models,real RTE,15.661741853705884,2.9477326342706807,← the judge
 κ = 0 flattening,real load in place,3.1983583860467935,0.0,94 département steps
 κ = 0 flattening,flattened to its mean,3.4402825394304575,0.0,what κ = 0 does
-ordering,neutral + flow,3.8327061630965984,0.7493344298897762,default
-ordering,neutral + queue,33.641077419627514,12.56999237911927,"queue of the paper, unsorted injections"
-ordering,sorted + flow,2.993791043253159,0.30260396120988914,injections sorted as in the paper
-ordering,sorted + queue,5.496444931958905,0.4803995707586155,"both orderings of the paper, locked"
+ordering,neutral + flow,4.493063812408928,0.9837621368336258,default
+ordering,neutral + queue,40.48027171376485,10.056469081299932,"queue of the paper, unsorted injections"
+ordering,sorted + flow,2.781601123837964,0.5982928895255473,injections sorted as in the paper
+ordering,sorted + queue,5.25247958744731,0.6765833003874456,"both orderings of the paper, locked"
