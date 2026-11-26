@@ -128,8 +128,8 @@ DATASETS = {
         path_csv=_FR / "postes-electriques-rte.csv",
         threshold_variable="population_density", threshold=1,
         N=4932, area_km2=538_401,
-        gamma_data=0.903, gamma_std=0.023, r0_data_m=12_679, rmax=160_000,
-        eta=6, m_star=3547, R_ref_m=496_900, largest_only=True,
+        gamma_data=0.899, gamma_std=0.027, r0_data_m=12_548, rmax=160_000,
+        eta=6, m_star=3661, R_ref_m=496_900, largest_only=True,
     ),
     "Gares France": dict(
         name="France", crs="EPSG:2154",
@@ -137,8 +137,8 @@ DATASETS = {
         path_csv=_FR / "noeuds_route500_gares.csv",
         threshold_variable="population_density", threshold=1,
         N=3470, area_km2=538_401,
-        gamma_data=0.730, gamma_std=0.042, r0_data_m=50_208, rmax=160_000,
-        eta=6, m_star=3136, R_ref_m=496_900, largest_only=True,
+        gamma_data=0.712, gamma_std=0.054, r0_data_m=51_267, rmax=160_000,
+        eta=6, m_star=3216, R_ref_m=496_900, largest_only=True,
     ),
     # Large datasets (N >> 10,000) are subsampled to N_data_cap points when
     # loaded: the O(N^2) cdist becomes impractical beyond that, and the
@@ -255,7 +255,7 @@ def compute_2pcf(xy_norm, ld, full=False, params=None, rmax=None, n_runs=1):
     The points are mapped back to the metric CRS of the dataset and passed
     to methods_two_point_correlation.PCF_with_variance with the parameters
     of calibration.py (cal.PCF_PARAMS, lightened by cal.pcf_budget above
-    5,000 points): split random catalogues drawn inside ld["gdf_edge"],
+    10,000 points): split random catalogues drawn inside ld["gdf_edge"],
     20 logarithmic bins from the mean nearest-neighbour distance of the
     point set to the rmax of the dataset, xi attached to the upper edge of
     the bin, k realisations of the random catalogue. This is the single
@@ -299,7 +299,8 @@ def compute_2pcf(xy_norm, ld, full=False, params=None, rmax=None, n_runs=1):
     if not full:
         return r, xi
     pcf = dict(r=r, xi=xi, l_xi=l_xi, xi_std=l_xi.std(axis=0),
-               dd=np.asarray(counts["DD"])[:n], counts=counts, N=len(xy_m))
+               dd=np.asarray(counts["DD"])[:n], rr=np.asarray(counts["RR"])[:n],
+               counts=counts, N=len(xy_m))
     pcf.update(fit_powerlaw(pcf))
     pcf.update(gamma_std=0.0 if pcf["gamma"] is not None else None,
                gamma_runs=[pcf["gamma"]], n_runs=1)
@@ -338,29 +339,31 @@ def fit_powerlaw(pcf, min_pairs=MIN_PAIRS, fit_range=FIT_RANGE):
     Same convention as the calibration (sp_helpers.fit_2pcf): curve_fit
     weighted by the spread of the k realisations, on the fit window of
     sp_helpers.fit_window, i.e. the bins [fit_range) minus the small-r
-    bins holding fewer than min_pairs data pairs (pcf["dd"]).
+    bins holding fewer than min_pairs pairs, min(pcf["dd"], pcf["rr"])
+    (DD alone when the dict has no "rr").
     Returns dict(gamma, r0_m, gamma_err, r0_err_m, fit_mask, fit_info);
     gamma is None when the fit fails.
     """
     g, r0, g_err, r0_err, (mask, info) = fit_2pcf(
         pcf["r"], pcf["l_xi"], a=fit_range[0], b=fit_range[1],
-        dd=pcf.get("dd"), min_pairs=min_pairs, return_window=True)
+        dd=pcf.get("dd"), min_pairs=min_pairs, return_window=True,
+        rr=pcf.get("rr"))
     return dict(gamma=g, r0_m=r0, gamma_err=g_err, r0_err_m=r0_err,
                 fit_mask=mask, fit_info=info)
 
 
-def fit_gamma(r, xi, dd=None, min_pairs=MIN_PAIRS, fit_range=FIT_RANGE):
+def fit_gamma(r, xi, dd=None, min_pairs=MIN_PAIRS, fit_range=FIT_RANGE, rr=None):
     """Power-law fit of one curve (r, xi), returns (gamma, r0 in metres).
 
     Shortcut of `fit_powerlaw` for a single mean curve, e.g. the output of
     compute_2pcf(..., full=False) or of metadata_marks.compute_2pcf_people.
     Same fit window (bins fit_range minus the small-r bins with fewer than
-    min_pairs data pairs when dd is given); with a single curve the fit is
+    min_pairs pairs when dd is given, min(DD, RR) with rr); with a single curve the fit is
     unweighted. gamma is None when the fit fails.
     """
     f = fit_powerlaw(dict(r=np.asarray(r, dtype=float),
                           l_xi=np.atleast_2d(np.asarray(xi, dtype=float)),
-                          dd=dd), min_pairs=min_pairs, fit_range=fit_range)
+                          dd=dd, rr=rr), min_pairs=min_pairs, fit_range=fit_range)
     return f["gamma"], f["r0_m"]
 
 
@@ -372,7 +375,7 @@ def describe_fit_window(pcf):
     return (f"fit window: bins {w['first']}..{w['last']} "
             f"({w['r_lo'] / 1e3:.2f}-{w['r_hi'] / 1e3:.1f} km), "
             f"{len(w['dropped_min_pairs'])} small-r bin(s) dropped "
-            f"(DD < {w['min_pairs']})")
+            f"({w.get('criterion', 'DD')} < {w['min_pairs']})")
 
 
 def js_divergence(r_ref, xi_ref, r_mod, xi_mod):
@@ -459,7 +462,8 @@ def build_sp_mixture(ds, ld, pcf_data, N_target, seed=SEED, verbose=False,
     xi_sp_al = _align(r_sp, np.nan_to_num(xi_sp), pcf_data["r"])
     mask = pcf_data.get("fit_mask")
     if mask is None:
-        mask, _ = fit_window(pcf_data["r"], pcf_data["xi"], dd=pcf_data.get("dd"))
+        mask, _ = fit_window(pcf_data["r"], pcf_data["xi"], dd=pcf_data.get("dd"),
+                             rr=pcf_data.get("rr"))
     a, log_a, n_used = log_amplitude_ratio(pcf_data["xi"], xi_sp_al, mask)
     if n_used == 0:
         a, log_a = 1.0, 0.0

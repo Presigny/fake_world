@@ -172,9 +172,9 @@ def build_sp_model(m_star, eta, gamma, R_ref, domain, crs=None, dim=2,
     Why this generator even in 2D (discussion with Charles, Nov. 2026):
     the border is handled child by child. A child drawn outside the domain
     is redrawn around the same parent, so the tree keeps its eta^L leaves
-    (up to the rare children still outside after max_tries draws), the
-    generation converges whatever the size of the tree, and the tree is not
-    biased towards the centre of the domain. The two historical variants
+    (up to the rare children still outside after max_tries draws) and the
+    generation converges whatever the size of the tree. This does not remove
+    the depletion near the border. The two historical variants
     either redraw the whole tree while one point is outside
     (check_inside, cost 1/p with p = 2-16 % of accepted trees) or truncate
     the tree at the border (`build_sp_model_truncated`, which loses the
@@ -255,12 +255,12 @@ def power_law(r, gamma, r0):
     return (r / r0) ** (-gamma)
 
 
-MIN_PAIRS = 100   # minimum number of data pairs (DD) for a bin to enter the fit
+MIN_PAIRS = 100   # minimum number of pairs, min(DD, RR), for a bin to enter the fit
 FIT_RANGE = (1, 19)
 
 
 def fit_window(r_edges, xi, dd=None, a=FIT_RANGE[0], b=FIT_RANGE[1],
-               min_pairs=MIN_PAIRS):
+               min_pairs=MIN_PAIRS, rr=None):
     """
     Boolean mask of the bins used for the power-law fit (and for log a).
 
@@ -269,12 +269,17 @@ def fit_window(r_edges, xi, dd=None, a=FIT_RANGE[0], b=FIT_RANGE[1],
        the last bins (near rmax, where the random catalogue is cut by the
        border) are left out;
     2. minimum-pairs criterion: the small-r bins are dropped, starting from
-       the first one, as long as they hold fewer than `min_pairs` data pairs
-       (DD). With few pairs, xi is dominated by the Poisson noise of DD and
-       the Landy-Szalay estimator can even be negative; keeping these bins
-       biases gamma. The first bin with DD >= min_pairs opens the window and
-       every bin above it (up to b) stays, so the criterion only moves the
-       lower bound of the window. When `dd` is None the rule is skipped;
+       the first one, as long as they hold fewer than `min_pairs` pairs,
+       counted as min(DD, RR) when the random pairs `rr` are given and as DD
+       otherwise. The Landy-Szalay estimator divides by RR, so its relative
+       noise is about 1/sqrt(min(DD, RR)): with few data pairs (sparse
+       point sets) or few random pairs (strongly clustered point sets, such
+       as an SP fractal whose clumps are much smaller than the spacing of
+       the random catalogue) xi is set by a handful of pairs and keeping
+       these bins biases gamma. The first bin with min(DD, RR) >= min_pairs
+       opens the window and every bin above it (up to b) stays, so the
+       criterion only moves the lower bound of the window. When `dd` is
+       None the rule is skipped;
     3. the bins where xi is NaN or infinite (RR = 0) are dropped.
 
     Parameters
@@ -285,6 +290,9 @@ def fit_window(r_edges, xi, dd=None, a=FIT_RANGE[0], b=FIT_RANGE[1],
         PCF_with_variance(..., return_counts=True)).
     a, b : int, index range [a, b).
     min_pairs : int, threshold of rule 2.
+    rr : ndarray or None, number of random pairs per bin (counts["RR"],
+        summed over the split catalogues). When given, rule 2 uses
+        min(DD, RR).
 
     Returns
     -------
@@ -301,8 +309,14 @@ def fit_window(r_edges, xi, dd=None, a=FIT_RANGE[0], b=FIT_RANGE[1],
 
     dropped = []
     if dd is not None:
-        dd = np.asarray(dd)[:n]
-        ok = np.where((idx >= a) & (dd >= min_pairs))[0]
+        npairs = np.asarray(dd, dtype=float)[:n]
+        if rr is not None:
+            rr = np.asarray(rr, dtype=float)[:n]
+            m = min(len(npairs), len(rr))
+            npairs = np.minimum(npairs[:m], rr[:m])
+            if m < n:
+                npairs = np.append(npairs, np.zeros(n - m))
+        ok = np.where((idx >= a) & (npairs >= min_pairs))[0]
         first = int(ok[0]) if len(ok) else b
         dropped = [int(i) for i in idx[(idx >= a) & (idx < first)]]
         mask &= idx >= first
@@ -312,6 +326,7 @@ def fit_window(r_edges, xi, dd=None, a=FIT_RANGE[0], b=FIT_RANGE[1],
     info = dict(first=int(used[0]) if len(used) else None,
                 last=int(used[-1]) if len(used) else None,
                 dropped_min_pairs=dropped, min_pairs=min_pairs,
+                criterion="DD" if rr is None else "min(DD, RR)",
                 r_lo=float(r_edges[used[0]]) if len(used) else np.nan,
                 r_hi=float(r_edges[used[-1]]) if len(used) else np.nan,
                 n_bins=int(mask.sum()))
@@ -362,7 +377,7 @@ def average_fits(fits):
 
 
 def fit_2pcf(r_edges, l_xi, a=FIT_RANGE[0], b=FIT_RANGE[1], dd=None,
-             min_pairs=MIN_PAIRS, return_window=False):
+             min_pairs=MIN_PAIRS, return_window=False, rr=None):
     """
     Fit a power law xi(r) = (r/r0)^(-gamma) to a 2PCF estimate, weighted by
     the spread of the realisations (CP convention: curve_fit with
@@ -381,6 +396,8 @@ def fit_2pcf(r_edges, l_xi, a=FIT_RANGE[0], b=FIT_RANGE[1], dd=None,
         Data pairs per bin; enables the minimum-pairs criterion of
         `fit_window` (small-r bins with DD < min_pairs are left out).
     min_pairs : int
+    rr : ndarray or None
+        Random pairs per bin; with it the criterion uses min(DD, RR).
     return_window : bool
         Also return the mask and the info dict of `fit_window`.
 
@@ -396,7 +413,8 @@ def fit_2pcf(r_edges, l_xi, a=FIT_RANGE[0], b=FIT_RANGE[1], dd=None,
     n = min(len(xi), len(r_edges))
     xi = xi[:n]; error = error[:n]; r_edges = r_edges[:n]
 
-    mask, info = fit_window(r_edges, xi, dd=dd, a=a, b=b, min_pairs=min_pairs)
+    mask, info = fit_window(r_edges, xi, dd=dd, a=a, b=b, min_pairs=min_pairs,
+                            rr=rr)
     fail = (None, None, None, None)
     if mask.sum() < 3:
         print("Power-law fit failed: fewer than 3 usable bins.")

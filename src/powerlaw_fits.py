@@ -112,8 +112,9 @@ def calib_counts(xy, gdf_edge, rmax, rng, nbins=20, N_run=5, size=7000, k=3,
 # --------------------------------------------------------------------------
 # Fits. Bins 1..18 (FIT_RANGE = (1, 19)), position = upper edge, as in
 # sp_helpers.fit_2pcf, minus the small-r bins holding fewer than MIN_PAIRS
-# data pairs (sp_helpers.fit_window): pass the DD counts as `dd` to apply
-# the criterion (dd=None keeps the plain index range).
+# pairs (sp_helpers.fit_window): pass the DD counts as `dd` to apply the
+# criterion, and the RR counts as `rr` to count min(DD, RR) (dd=None keeps
+# the plain index range).
 # --------------------------------------------------------------------------
 A, B = FIT_RANGE
 
@@ -122,11 +123,12 @@ def pl(r, g, r0):
     return (r / r0) ** (-g)
 
 
-def window(edges, xi, dd=None, min_pairs=MIN_PAIRS):
+def window(edges, xi, dd=None, min_pairs=MIN_PAIRS, rr=None):
     """Boolean mask of the fit bins (sp_helpers.fit_window), cut to the
     common length of edges and xi."""
     n = min(len(edges), len(xi))
-    mask, _ = fit_window(edges[:n], xi[:n], dd=dd, a=A, b=B, min_pairs=min_pairs)
+    mask, _ = fit_window(edges[:n], xi[:n], dd=dd, a=A, b=B, min_pairs=min_pairs,
+                         rr=rr)
     return mask, n
 
 
@@ -136,10 +138,10 @@ def dd_of(reps):
     return np.mean([c["DD"] for c in reps], axis=0)
 
 
-def fit_wls(edges, xis, dd=None, min_pairs=MIN_PAIRS):
+def fit_wls(edges, xis, dd=None, min_pairs=MIN_PAIRS, rr=None):
     """Paper method: curve_fit on the mean xi, sigma = std over repetitions."""
     xi = np.mean(xis, axis=0); er = np.std(xis, axis=0)
-    ok, n = window(edges, xi, dd, min_pairs)
+    ok, n = window(edges, xi, dd, min_pairs, rr)
     r = edges[:n][ok]; y = xi[:n][ok]; s = er[:n][ok]
     if ok.sum() < 3:
         return np.nan, np.nan, np.nan
@@ -152,9 +154,9 @@ def fit_wls(edges, xis, dd=None, min_pairs=MIN_PAIRS):
         return np.nan, np.nan, np.nan
 
 
-def fit_ols_log(edges, xis, dd=None, min_pairs=MIN_PAIRS):
+def fit_ols_log(edges, xis, dd=None, min_pairs=MIN_PAIRS, rr=None):
     xi = np.mean(xis, axis=0)
-    ok, n = window(edges, xi, dd, min_pairs)
+    ok, n = window(edges, xi, dd, min_pairs, rr)
     ok &= xi[:n] > 0
     r = edges[:n][ok]; y = xi[:n][ok]
     if ok.sum() < 3:
@@ -181,7 +183,8 @@ def fit_poisson_mle(edges, reps, same_data, min_pairs=MIN_PAIRS):
     # Same window as fit_wls: bins [A, B) from the first bin with at least
     # min_pairs data pairs (the window is contiguous, so lo/hi are slices).
     xi_m = np.mean([ls_xi(c) for c in reps], axis=0)
-    ok, n = window(edges, xi_m, dd_of(reps), min_pairs)
+    ok, n = window(edges, xi_m, dd_of(reps), min_pairs,
+                   np.mean([c["RR"] for c in reps], axis=0))
     used = np.where(ok)[0]
     if len(used) < 3:
         return np.nan, np.nan, np.nan

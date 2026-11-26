@@ -69,17 +69,23 @@ PCF_PARAMS = dict(N_run=5, size=7000, k=3, scale="log", nbins=20,
                   bootstrap_size=10_000, bootstrap_N_real=10)
 # FIT_RANGE = (1, 19): bins used for the power-law fit (from sp_helpers)
 # MIN_PAIRS = 100: a small-r bin enters the fit only from the first bin
-#                  holding at least MIN_PAIRS data pairs (sp_helpers)
+#                  holding at least MIN_PAIRS pairs, min(DD, RR) (sp_helpers)
 SP_DIM = 2                     # dimension passed to the N-dim SP generator
 
 
 def pcf_budget(n, N_run=5, size=7000, k=3):
     """Lighter 2PCF settings for large point sets.
 
-    Returns (N_run, size, k): unchanged below 5,000 points, then fewer and
-    smaller random catalogues.
+    Returns (N_run, size, k): unchanged below 10,000 points (the size above
+    which _pcf_safe switches to bootstrap sub-samples), then fewer and
+    smaller random catalogues. The threshold was 5,000 before 24 November
+    2026. The SP fractals of RTE and of the railway stations (eta^L = 7,776
+    leaves) then got 2 catalogues of 2,000 points and k = 1: their first
+    bins held 2 to 40 random pairs, and gamma_SP moved by 0.1 to 0.3 from one
+    run to the next (0.81 +- 0.09 on RTE against 0.911 +- 0.027 with the
+    full budget, gamma_cal = 0.903).
     """
-    if n < 5_000:
+    if n < 10_000:
         return N_run, size, k
     if n < 30_000:
         return 2, 2_000, 1
@@ -155,25 +161,25 @@ def data_2pcf(gdf_projected, gdf_edge, crs, rmax, params=PCF_PARAMS,
 
 
 def fit_gamma(r_edges, l_xi, dd=None, fit_range=FIT_RANGE,
-              min_pairs=MIN_PAIRS, return_window=False):
+              min_pairs=MIN_PAIRS, return_window=False, rr=None):
     """Power-law fit xi(r) = (r / r0)^(-gamma) weighted by the realisations.
 
     The fit uses the bins of `sp_helpers.fit_window`: indices
     [fit_range[0], fit_range[1]), minus the small-r bins with fewer than
-    min_pairs data pairs when `dd` is given.
+    min_pairs pairs when `dd` is given (min(DD, RR) when `rr` is given too).
     Returns (gamma, r0, gamma_err, r0_err), or four None on failure, with
     (mask, info) appended when return_window is True.
     """
     return fit_2pcf(r_edges, l_xi, a=fit_range[0], b=fit_range[1], dd=dd,
-                    min_pairs=min_pairs, return_window=return_window)
+                    min_pairs=min_pairs, return_window=return_window, rr=rr)
 
 
 def _fit_runs(compute, n_runs):
     """Run `compute` n_runs times and average the power-law fits.
 
     compute() returns (r_edges, l_xi, counts) for one run of the 2PCF. Each
-    run is fitted on its own window (minimum-pairs criterion on its DD
-    counts). The realisations of all the runs are interpolated on the bins
+    run is fitted on its own window (minimum-pairs criterion on the
+    min(DD, RR) counts of the run). The realisations of all the runs are interpolated on the bins
     of the first run and stacked, so that their mean is the 2PCF averaged
     over n_runs x k realisations.
     Returns a dict: r_edges, l_xi (array, n_runs x k rows), counts, mask and
@@ -186,6 +192,7 @@ def _fit_runs(compute, n_runs):
     fits, l_all, mask, win = [], [], None, None
     for r_e, l_xi, c in runs:
         g, r0, g_err, r0_err, (m_k, w_k) = fit_gamma(r_e, l_xi, dd=c["DD"],
+                                                    rr=c["RR"],
                                                     return_window=True)
         fits.append((g, r0, g_err, r0_err))
         if mask is None:
@@ -434,7 +441,7 @@ def calibrate(name, datasets=None, n_scan=40, n_real=5, n_jobs=None,
     say(f"[{name}] fit window: bins {win['first']}..{win['last']} "
         f"({win['r_lo'] / 1e3:.2f}-{win['r_hi'] / 1e3:.1f} km), "
         f"{len(win['dropped_min_pairs'])} small-r bin(s) dropped "
-        f"(DD < {win['min_pairs']})")
+        f"({win['criterion']} < {win['min_pairs']})")
     say(f"[{name}] gamma={gamma:.4f} (mean of {dr['n_ok']} runs, spread "
         f"{dr['gamma_std']:.4f}, fit error {gamma_err:.4f})  r0={r0:.0f} m")
 

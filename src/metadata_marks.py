@@ -386,7 +386,7 @@ def compute_2pcf_people(xy, pop, ld, full=False, params=None,
 
     DD_w = _hist(d_pairs, w_pairs) / max(w_pairs.sum(), 1e-12)
     DD_n = _hist(d_pairs)                       # unweighted node pairs
-    DR_list, RR_list = [], []
+    DR_list, RR_list, RR_raw = [], [], np.zeros(nbins)
     for _ in range(N_run):
         rand_xy = mtpc.generate_random_point(ld["gdf_edge"], size, ld["crs"])
         dr = cdist(xy_m, rand_xy)
@@ -394,7 +394,9 @@ def compute_2pcf_people(xy, pop, ld, full=False, params=None,
         DR_list.append(_hist(dr.ravel(), w_dr) / max(w.sum() * len(rand_xy), 1e-12))
         rr = cdist(rand_xy, rand_xy)[np.triu_indices(len(rand_xy), k=1)]
         rr = rr[rr > 0]
-        RR_list.append(_hist(rr) / max(len(rr), 1))
+        h_rr = _hist(rr)
+        RR_raw += h_rr                          # random pairs, summed over catalogues
+        RR_list.append(h_rr / max(len(rr), 1))
     DR_w = np.mean(DR_list, axis=0)
     RR = np.mean(RR_list, axis=0)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -402,7 +404,7 @@ def compute_2pcf_people(xy, pop, ld, full=False, params=None,
     if not full:
         return r_edges, xi
     pcf = dict(r=r_edges, xi=xi, l_xi=np.array([xi]), xi_std=np.zeros(nbins),
-               dd=DD_n, N=n)
+               dd=DD_n, rr=RR_raw, N=n)
     pcf.update(su.fit_powerlaw(pcf))
     return pcf
 
