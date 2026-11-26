@@ -22,12 +22,13 @@ state before the change is commit `8d18f31`.
 `sp_helpers.soneira_peebles_nd(eta, lamb, L, R, center, domain, rng)` is the only
 generator, called with `dim = 2` on the maps (`sp_helpers.build_sp_model(..., dim=2)`,
 `calibration.SP_DIM = 2`) and `dim = 3` on the connectome. At the border, a child that
-falls outside is drawn again alone, up to 64 times. The tree keeps its η^L leaves and
-its geometry, and the generation ends whatever the size of the territory. The two
+falls outside is drawn again alone, up to 64 times. The tree keeps its η^L leaves,
+and the generation ends whatever the size of the territory. The two
 former options are worse: redrawing the whole tree until every point is inside
 (`check_inside`) does not end when η^L is large, and keeping only the inside points of
 a free tree (the former `build_sp_model`, now `build_sp_model_truncated`) removes whole
-branches near the border and changes the number of leaves. The radial law of a child
+branches near the border and changes the number of leaves. The child-by-child rule
+does not remove the depletion near the border. The radial law of a child
 is `r = R u^(1/dim)` (uniform in the disc, the definition of Soneira and Peebles);
 `radial="linear"` gives back `r = R u` of the former 2D code.
 
@@ -47,11 +48,15 @@ the border), k = 3 repetitions, fit weighted by their spread on the bins 1 to
 18. The comparison notebooks call it through `synthesis_utils.compute_2pcf(xy_norm, ld)`;
 the former normalised estimator `compute_2pcf_norm` is removed. The fit window
 (`sp_helpers.fit_window`) has one more rule: starting from the smallest r, a bin is
-dropped as long as it holds fewer than `MIN_PAIRS = 100` data pairs DD. The first bin
-with DD ≥ 100 opens the window and every bin above it is kept. The relative Poisson
-noise of a bin is 1/√DD, 10 % at 100 pairs; below, ξ is set by a handful of pairs. The
-pair counts come from `PCF_with_variance(..., return_counts=True)`, and the same window
-is used for γ and for log a. The notebooks that compute a 2PCF on a map recall these
+dropped as long as min(DD, RR) is below `MIN_PAIRS = 100`, with DD the data pairs and
+RR the random pairs of the bin. The first bin with min(DD, RR) ≥ 100 opens the window
+and every bin above it is kept. The relative noise of the Landy-Szalay estimate is
+about 1/√min(DD, RR), 10 % at 100 pairs; below, ξ is set by a handful of pairs. Until
+24 November 2026 the rule counted DD only (see the γ_SP bullet below the calibration
+table). The pair counts come from `PCF_with_variance(..., return_counts=True)`, and the
+same window is used for γ and for log a. Below 10 000 points the 2PCF uses the full
+budget (5 catalogues × 7 000 points, k = 3); `cal.pcf_budget` lightens it only above
+(threshold raised from 5 000 on 24 November 2026). The notebooks that compute a 2PCF on a map recall these
 conventions in their second cell and print the window they used
 (`su.describe_fit_window`).
 
@@ -193,25 +198,37 @@ Two points matter when comparing with `out/00_dataset_calibration_reference.csv`
   `methods_two_point_correlation`), so γ and m* change slightly from one run
   to the next.
 - The amplitude ratio depends on the SP draw, so the draw is seeded (`--seed`, 42
-  by default). On Belgium, over ten draws, a goes from 0.08 to 0.19 with the log
-  estimator (notebook 11). The former mean of the ratios ρ went from −0.29 to 0.35 on
-  the same draws and had to be clipped on two of them, which is why it was replaced.
+  by default). On Belgium, over ten draws, a goes from 0.06 to 0.22 with the log
+  estimator (notebook 11, run of 24 November 2026), i.e. an SP fraction a^(1/2) from
+  0.24 to 0.47. The former mean of the ratios ρ went from −0.32 to 0.51 on the same
+  draws and was negative on one of them, which is why it was replaced.
 
 ### Calibration exponent and exponent of the comparison extract
 
 γ_cal is measured on the complete dataset, the model comparison works on an extract of
-3 000 nodes. Both use the same 2PCF chain and the mean over 5 runs, and notebook 10
-checks what is left between them. On the extract, the spread over runs is 0.01 (German
-stops) to 0.13 (Austrian cities), from the unseeded random catalogues. The mean gives
-back γ_cal within 0.09 on the nine datasets (−0.05 to +0.08). The gaps of up to 0.3
+3 000 nodes. Both use the same 2PCF chain (γ_cal is the mean over 5 runs, γ of the
+extract the mean over 20 runs), and notebook 10 checks what is left between them (run of
+26 November 2026). On the extract, the spread over runs is 0.03 (RTE) to 0.10 (Austrian
+cities), from the unseeded random catalogues. The mean gives back γ_cal within 0.09 on
+the nine datasets (−0.05 to +0.08, the largest on RTE). The gaps of up to 0.3
 reported before November 2026 came from the second estimator of the comparison, which is
-removed. At N = 3 000 the first bin of the fit window holds 370 to 1 360 data pairs, so
-`MIN_PAIRS = 100` drops no bin on these datasets; it protects the fits on smaller
-samples.
+removed. At N = 3 000 the first bin of the fit window holds 372 to 1 361 data pairs, so
+the criterion on min(DD, RR) drops no bin of the data on these datasets; it acts on
+the SP fractals, whose first bins hold few random pairs (bin 1 is dropped on the RTE
+fractal, notebook 11).
 
-The mixture reproduces γ of the extract within 0.11 on three datasets (RTE, ENEDIS,
-German stops) and is steeper by 0.16 to 0.38 on the six others, with a spread of 0.08
-to 0.18 over five seeds. On the 2PCF JSD the SP has the best mean rank, with one
+The mixture reproduces γ of the extract within 0.10 on four datasets (RTE −0.10, ENEDIS
+−0.06, German stops +0.05, railway stations +0.08) and is steeper by 0.12 to 0.37 on the
+five others (roads +0.12, Austrian cities +0.16, municipalities +0.20, Swiss stops
++0.24, Belgian cities +0.37), i.e. 3.9 to 8.2 standard errors of the mean over 20
+realisations. One realisation spreads by 0.08 to 0.21, so on these five datasets the gap
+is only 0.9 to 1.9 times the spread of a single realisation. Until 26 November 2026
+notebook 10 used 5 realisations, and the mean gap then moved by up to 0.13 from one run
+of the notebook to the next (Belgian cities +0.32, then +0.45). Two independent runs with
+20 realisations agree within 0.05. On the Austrian and Belgian cities and the
+Swiss stops the fractal alone is within 0.07 of γ_cal, so the steepening comes with the
+background: the dilution ξ_mix = f² ξ_SP is not uniform in r (Fig. 1(c) of the paper,
+the mixture is above the data below 10 km and below it beyond 20 km). On the 2PCF JSD the SP has the best mean rank, with one
 realisation (2.11, then LGCP 2.22) and with the mean of ten (1.78, then LGCP 2.56). On
 the nearest-neighbour distances it is third (2.89).
 
@@ -225,24 +242,32 @@ values (γ, r0, η, m*, R_ref, plus `gamma_std`). Table 1 of March 2026 stays in
 |---|---|---|---|---|---|---|
 | Austria Cities | 0.770 (0.061) | 0.789 | 2 | 2 142 (2 142) | 0.819 (0.009) | 0.079 |
 | Belgium Cities | 0.864 (0.088) | 0.808 | 2 | 718 (718) | 0.928 (0.026) | 0.117 |
-| RTE France | 0.903 (0.023) | 0.930 | 6 | 3 547 (3 661) | 1.164 (0.529) | 0.135 |
-| Gares France | 0.730 (0.042) | 0.643 | 6 | 3 136 (2 896) | 0.915 (0.471) | 0.494 |
+| RTE France | 0.899 (0.027) | 0.930 | 6 | 3 661 (3 661) | 0.913 (0.030) | 0.140 |
+| Gares France | 0.712 (0.054) | 0.643 | 6 | 3 216 (2 896) | 0.810 (0.012) | 0.517 |
 | ENEDIS France | 0.919 (0.030) | 0.954 | 6 | 256 337 (235 268) | 1.016 (0.018) | 0.082 |
 | France Communes | 0.250 (0.005) | 0.254 | 2 | 22 275 (24 647) | 0.669 (0.017) | 0.235 |
 | France Routes | 0.556 (0.012) | 0.525 | 7 | 645 844 (625 121) | 0.761 (0.015) | 0.106 |
 | Germany Stops | 0.596 (0.008) | 0.612 | 4 | 413 956 (413 956) | 0.880 (0.012) | 0.158 |
 | Swiss Stops | 0.858 (0.005) | 0.873 | 12 | 52 026 (56 331) | 0.907 (0.019) | 0.266 |
 
-- γ moves by 0.004 to 0.06 from Table 1, except on the railway stations (+0.09). η is
-  unchanged everywhere. The spread over runs is 0.02 to 0.09 on the four small sets
+- γ moves by 0.004 to 0.06 from Table 1, except on the railway stations (+0.07). η is
+  unchanged everywhere. The spread over runs is 0.03 to 0.09 on the four small sets
   (N < 5 000), and 0.03 or less on the five large ones.
 - γ_SP is the exponent of the fractal alone, fitted with the same estimator. Eq. (1) of
   the paper holds for the ensemble average and between r_min and R, so it need not
-  equal γ. On RTE and the railway stations (η = 6, N < 5 000) it moves by ±0.5 from one
-  run to the next: the SP clumps are much smaller than the spacing of the random
-  catalogue, the first bins hold 1 to 10 RR pairs, and `MIN_PAIRS` only counts DD.
-  γ_SP does not enter `DATASETS`; a, which uses the mean ξ_SP over the window, is
-  affected on these two sets. A criterion on min(DD, RR) is an open question.
+  equal γ. It now stays within 0.10 of γ_cal on the four small sets.
+- RTE and railway stations, fixed on 24 November 2026. Their fractal has 6^5 = 7 776
+  points, which `pcf_budget` (threshold 5 000) sent to the light budget (2 catalogues
+  × 2 000 points, k = 1). The SP clumps are much smaller than the spacing of such a
+  random catalogue, the first bins held 2 to 40 RR pairs, and `MIN_PAIRS` only
+  counted DD. γ_SP then moved by ±0.5 from one run to the next (RTE 1.164 ± 0.529,
+  stations 0.915 ± 0.471). With the full budget below 10 000 points and the
+  min(DD, RR) criterion, γ_SP is 0.913 ± 0.030 on RTE (γ_cal 0.899) and 0.810 ± 0.012
+  on the stations. The data windows did not change (0 bins dropped, RR is ample), so γ
+  only moves within its run-to-run spread (0.903 → 0.899, 0.730 → 0.712). The
+  amplitude ratio moves a little (a 0.135 → 0.140 and 0.494 → 0.517), and m* follows
+  (3 547 → 3 661, 3 136 → 3 216). On the other seven sets nothing changes: their
+  fractal is either below 5 000 points or above 10 000.
 
 ## Changes to `src/methods_two_point_correlation.py`
 
