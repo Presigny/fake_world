@@ -1,16 +1,16 @@
 observable,case,value
 D_M [not discriminant],Data,2.31
-D_M [not discriminant],SP + rank matching / k-NN,1.126
-D_M [not discriminant],SP + rank matching / count,1.423
+D_M [not discriminant],SP + rank matching / k-NN,1.18
+D_M [not discriminant],SP + rank matching / count,1.42
 D_M [not discriminant],"Data, shuffled marks",2.276
 D_M [not discriminant],Poisson + data marks,2.179
 M_norm at peak (1 = no coupling),Data,1.738
-M_norm at peak (1 = no coupling),SP + rank matching / k-NN,4.177
-M_norm at peak (1 = no coupling),SP + rank matching / count,2.483
+M_norm at peak (1 = no coupling),SP + rank matching / k-NN,3.399
+M_norm at peak (1 = no coupling),SP + rank matching / count,2.182
 M_norm at peak (1 = no coupling),"Data, shuffled marks",1.104
 M_norm at peak (1 = no coupling),Poisson + data marks,1.219
 gamma_people,Data,1.95
-gamma_people,SP + rank matching / k-NN,1.419
-gamma_people,SP + rank matching / count,1.122
-gamma_people,"Data, shuffled marks",0.428
-gamma_nodes,Data,0.821
+gamma_people,SP + rank matching / k-NN,1.95
+gamma_people,SP + rank matching / count,1.15
+gamma_people,"Data, shuffled marks",0.448
+gamma_nodes,Data,0.841
